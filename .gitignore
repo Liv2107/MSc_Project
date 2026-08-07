@@ -1,0 +1,38 @@
+# PURPOSE
+# Keep large, generated, private, or machine-specific artefacts out of version control.
+# Research repositories become difficult to reproduce when raw data, model weights,
+# and generated figures are accidentally mixed with the source code that produced them.
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Notebook and editor state
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# Secrets and machine-local settings
+.env
+*.local.yaml
+
+# Data, weights, and generated outputs. Each directory contains a README that explains
+# how to populate it; the contents themselves should normally stay local.
+data/**
+!data/README.md
+!data/GENIMAGE.md
+!data/manifest_template.csv
+checkpoints/**
+!checkpoints/README.md
+outputs/**
+!outputs/README.md
+
+# IMPLEMENTATION CHECKLIST
+# [ ] Review this list before the first commit.
+# [ ] Confirm that no raw dataset licences prohibit committing metadata.
+# [ ] Add project-specific IDE or cluster artefacts as they appear.

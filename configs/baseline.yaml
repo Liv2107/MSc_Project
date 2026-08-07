@@ -1,0 +1,28 @@
+# PURPOSE
+# In-distribution reference: train and evaluate on declared known generators. This
+# demonstrates that the model/pipeline can learn the task, but does not by itself
+# answer whether performance transfers to a new generator.
+
+base_config: base.yaml
+
+experiment:
+  type: baseline
+  name: baseline_known_generators
+
+generators:
+  # TODO: Replace placeholders with names that exactly match the validated manifest.
+  train: [generator_a, generator_b, generator_c]
+  validation: [generator_a, generator_b, generator_c]
+  test: [generator_a, generator_b, generator_c]
+  unseen: null
+  include_real_images: true
+
+training:
+  fine_tune_mode: head_only
+
+# IMPLEMENTATION CHECKLIST
+# [ ] Replace placeholder generator names and reject unknown names.
+# [ ] Verify train/validation/test sample and provenance-group disjointness.
+# [ ] Inspect label/generator balance and fixed real-image policy.
+# [ ] Confirm selection uses validation only.
+# [ ] Save best-checkpoint test predictions for every declared seed.

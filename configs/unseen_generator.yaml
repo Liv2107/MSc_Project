@@ -1,0 +1,35 @@
+# PURPOSE
+# Leave one generator entirely out of training/model selection, then evaluate its
+# untouched final test partition. This is the primary cross-generator generalisation
+# measurement and the 0%-adaptation reference for recovery.
+
+base_config: base.yaml
+
+experiment:
+  type: unseen_generator
+  name: leave_one_generator_out
+
+generators:
+  # TODO: Replace A/B/C/D with exact manifest names. ``unseen`` must not occur in
+  # train or validation. Repeat the protocol with each suitable generator held out.
+  train: [generator_a, generator_b, generator_c]
+  validation: [generator_a, generator_b, generator_c]
+  test: [generator_d]
+  unseen: generator_d
+  include_real_images: true
+
+unseen_protocol:
+  adaptation_fraction: 0.5
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  fixed_real_test_pool: true
+
+training:
+  fine_tune_mode: head_only
+
+# IMPLEMENTATION CHECKLIST
+# [ ] Assert generator D is absent from training, validation, and threshold selection.
+# [ ] Persist adaptation/final-test partitions before model development.
+# [ ] Audit source groups across all partitions.
+# [ ] Fix and document the accompanying real-image comparison pool.
+# [ ] Store the 0% predictions/metrics for later recovery comparisons.

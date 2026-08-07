@@ -1,0 +1,100 @@
+# PURPOSE
+# Shared defaults for every experiment. Research configurations belong in version
+# control because they make changes to data, optimisation, transforms, and evaluation
+# visible in review. Every run should save a fully resolved copy after inheritance.
+#
+# IMPLEMENTATION ORDER
+# 1. Replace placeholder paths and generator names only after the manifest is audited.
+# 2. Validate every field in src/utils/config.py.
+# 3. Run shape/schema dry checks before any expensive training.
+# 4. Freeze final study configs rather than editing them between reported runs.
+
+project:
+  name: ai_image_detector_generalisation
+  output_root: outputs
+  checkpoint_root: checkpoints
+
+data:
+  # Keep paths relative to one documented repository/config root for portability.
+  root: data
+  manifest_path: data/manifests/dataset.csv
+  split_path: data/manifests/splits.csv
+  image_path_column: image_path
+  sample_id_column: sample_id
+  label_column: label
+  generator_column: generator
+  group_column: source_group
+  real_generator_name: real
+  real_label: 0
+  fake_label: 1
+
+model:
+  clip_model_name: openai/clip-vit-base-patch32
+  # Immutable Hub commit resolved on 2026-08-04.
+  clip_revision: 3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268
+  feature_source: pooled_output
+  classifier_dropout: 0.0
+  image_size: 224
+  initial_checkpoint: null
+  decision_threshold: 0.5
+
+transforms:
+  # Verified against the pinned checkpoint's preprocessor_config.json.
+  train:
+    resize: 224
+    center_crop: 224
+    random_horizontal_flip_probability: 0.0
+    normalize_mean: [0.48145466, 0.4578275, 0.40821073]
+    normalize_std: [0.26862954, 0.26130258, 0.27577711]
+  evaluation:
+    resize: 224
+    center_crop: 224
+    normalize_mean: [0.48145466, 0.4578275, 0.40821073]
+    normalize_std: [0.26862954, 0.26130258, 0.27577711]
+
+training:
+  epochs: 10
+  batch_size: 32
+  # Start at zero for a reliable Windows baseline. Raise only after worker-safe IO
+  # and deterministic seeding have been verified on the target machine.
+  num_workers: 0
+  learning_rate: 0.00001
+  weight_decay: 0.01
+  optimizer: adamw
+  loss: bce_with_logits
+  positive_class_weight: null
+  scheduler: cosine_with_warmup
+  warmup_fraction: 0.1
+  mixed_precision: true
+  gradient_clip_norm: 1.0
+  fine_tune_mode: head_only
+  early_stopping:
+    enabled: true
+    metric: f1
+    mode: max
+    patience: 3
+    min_delta: 0.0
+  checkpoint_metric: f1
+
+evaluation:
+  metrics: [accuracy, precision, recall, f1, roc_auc, average_precision]
+  save_sample_predictions: true
+  confusion_matrix: true
+  roc_curve: true
+  precision_recall_curve: true
+  per_generator: true
+  # TODO: Decide whether a fake-generator slice is paired with a fixed real test pool.
+  generator_evaluation_policy: pair_with_fixed_real_pool
+
+reproducibility:
+  seed: 42
+  experiment_seeds: [42, 123, 456]
+  deterministic_algorithms: true
+
+# IMPLEMENTATION CHECKLIST
+# [ ] Confirm all paths resolve under the documented root.
+# [x] Pin the model to an immutable revision.
+# [x] Verify transform values against the exact chosen processor.
+# [ ] Tune hyperparameters using training/validation only and freeze them in configs.
+# [ ] Confirm worker count and mixed precision on the target Windows/GPU environment.
+# [ ] Save resolved YAML and environment metadata with every run.

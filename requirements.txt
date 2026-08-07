@@ -1,0 +1,36 @@
+# PURPOSE
+# A deliberately small dependency inventory for the eventual implementation.
+# Pin exact versions in a lock file only after confirming the Python/CUDA environment;
+# inventing pins now would create false reproducibility rather than real reproducibility.
+
+# Core numerical and configuration tools
+numpy
+pandas
+PyYAML
+Pillow
+
+# Deep learning and the CLIP implementation intended by this scaffold
+torch
+torchvision
+transformers
+
+# Evaluation and visualisation
+scikit-learn
+matplotlib
+seaborn
+
+# Notebook workflow
+jupyterlab
+ipykernel
+
+# Development-time quality checks
+pytest
+pytest-cov
+ruff
+mypy
+
+# IMPLEMENTATION CHECKLIST
+# [ ] Create a clean virtual environment with the Python version documented in README.
+# [ ] Select PyTorch/CUDA builds appropriate for the target machine.
+# [ ] Freeze a tested environment to a lock file before running final experiments.
+# [ ] Record GPU driver and CUDA versions alongside dissertation results.

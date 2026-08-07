@@ -1,0 +1,43 @@
+# PURPOSE
+# Measure recovery after limited labelled exposure to the previously unseen generator.
+# Percentages refer only to its persisted adaptation pool, never its final test set.
+
+base_config: base.yaml
+
+experiment:
+  type: fine_tuning
+  name: limited_data_recovery
+
+generators:
+  train: [generator_a, generator_b, generator_c]
+  validation: [generator_a, generator_b, generator_c]
+  test: [generator_d]
+  unseen: generator_d
+  include_real_images: true
+
+fine_tuning:
+  # 5% probes very-low-data recovery; 10% modest exposure; 20% an intermediate
+  # regime; 50% a substantial but still limited reference. Always report counts.
+  percentages: [0.05, 0.10, 0.20, 0.50]
+  subset_seeds: [42, 123, 456]
+  nested_subsets: true
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  # TODO: Point to the compatible 0%-adaptation/known-generator checkpoint.
+  starting_checkpoint: checkpoints/REPLACE_WITH_BASELINE_CHECKPOINT.pt
+  reload_starting_checkpoint_each_run: true
+  fine_tune_mode: head_only
+  # TODO: Define grouped adaptation train/validation policy for tiny subsets.
+  adaptation_validation_fraction: 0.2
+
+training:
+  epochs: 5
+  learning_rate: 0.00001
+  fine_tune_mode: head_only
+
+# IMPLEMENTATION CHECKLIST
+# [ ] Replace/check starting checkpoint, manifest hash, and split identity.
+# [ ] Save nested subset IDs and actual counts for every subset seed.
+# [ ] Keep adaptation validation and final test completely separate.
+# [ ] Reload identical starting weights for each independent percentage/seed run.
+# [ ] Evaluate the same final-test IDs and combine results with the measured 0% run.

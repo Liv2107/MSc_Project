@@ -1,0 +1,48 @@
+# In-distribution GenImage baseline using all eight official generator subsets.
+# The importer maps official train -> train and partitions official val into
+# model-selection validation plus untouched test data.
+
+base_config: base.yaml
+
+experiment:
+  type: baseline
+  name: genimage_all_generators_baseline
+
+data:
+  root: data
+  manifest_path: data/manifests/genimage.csv
+  split_path: data/manifests/genimage_splits.csv
+
+generators:
+  train:
+    - midjourney
+    - stable_diffusion_v1_4
+    - stable_diffusion_v1_5
+    - adm
+    - glide
+    - wukong
+    - vqdm
+    - biggan
+  validation:
+    - midjourney
+    - stable_diffusion_v1_4
+    - stable_diffusion_v1_5
+    - adm
+    - glide
+    - wukong
+    - vqdm
+    - biggan
+  test:
+    - midjourney
+    - stable_diffusion_v1_4
+    - stable_diffusion_v1_5
+    - adm
+    - glide
+    - wukong
+    - vqdm
+    - biggan
+  unseen: null
+  include_real_images: true
+
+training:
+  fine_tune_mode: head_only

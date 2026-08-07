@@ -1,0 +1,33 @@
+# PURPOSE
+# Compare how much of CLIP must change to recover on the unseen generator. Only the
+# declared adaptation depth should differ across paired conditions.
+
+base_config: fine_tuning.yaml
+
+experiment:
+  type: ablation
+  name: fine_tuning_depth_ablation
+
+ablation:
+  modes: [head_only, last_block, full]
+  control_starting_checkpoint: true
+  control_subset_ids: true
+  control_final_test_ids: true
+  # TODO: Decide and justify equal epochs, update steps, or another compute budget.
+  training_budget_policy: equal_epochs
+  record_trainable_parameter_names: true
+  record_training_time: true
+
+# Optional mode-specific optimisation belongs here only if validated fairly. Leaving
+# values null means use the shared training settings for the initial implementation.
+mode_overrides:
+  head_only: null
+  last_block: null
+  full: null
+
+# IMPLEMENTATION CHECKLIST
+# [ ] Validate all three modes against the exact CLIP module structure.
+# [ ] Confirm identical checkpoint/subset/test IDs across paired conditions.
+# [ ] Log trainable parameter names/counts and fresh optimiser groups for every mode.
+# [ ] Freeze a fair training-budget and hyperparameter-selection policy.
+# [ ] Report performance variation and compute cost without inventing conclusions.
