@@ -1,0 +1,28 @@
+# Leave-one-generator-out on Tiny GenImage, holding out stable_diffusion_v1_5.
+# Produces the 0%-adaptation reference for the stable_diffusion_v1_5 recovery curve.
+#
+# The final test set is built balanced 50/50 (all stable_diffusion_v1_5 test fakes plus an equal number
+# of reals from a FIXED real pool shared across held-out generators), so precision, F1,
+# and PR-AUC are comparable between generators and against the in-distribution set.
+
+base_config: tiny_genimage_base.yaml
+
+experiment:
+  type: unseen_generator
+  name: tiny_unseen_stable_diffusion_v1_5
+
+generators:
+  train: [biggan, vqdm, wukong, adm, glide, midjourney]
+  validation: [biggan, vqdm, wukong, adm, glide, midjourney]
+  test: [stable_diffusion_v1_5]
+  unseen: stable_diffusion_v1_5
+  include_real_images: true
+
+unseen_protocol:
+  # Must be 1.0: the adaptation pool is the held-out generator's WHOLE official-train
+  # slice, while the final test partition comes from the official-val slice, so the two
+  # are already provenance disjoint. The runner rejects any other value.
+  adaptation_fraction: 1.0
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  fixed_real_test_pool: true

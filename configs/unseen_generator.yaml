@@ -19,7 +19,11 @@ generators:
   include_real_images: true
 
 unseen_protocol:
-  adaptation_fraction: 0.5
+  # Must be 1.0: the adaptation pool is the held-out generator's WHOLE official-train
+  # slice, while the final test partition comes from the official-val slice, so the two
+  # are already provenance disjoint. The runner rejects any other value rather than
+  # silently ignoring it (previously this declared 0.5, which never happened).
+  adaptation_fraction: 1.0
   adaptation_split_name: adaptation_pool
   final_test_split_name: unseen_test
   fixed_real_test_pool: true

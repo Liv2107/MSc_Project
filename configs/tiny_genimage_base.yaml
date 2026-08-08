@@ -1,0 +1,32 @@
+# Shared settings for every Tiny GenImage experiment.
+#
+# PROVENANCE: Tiny GenImage (Kaggle yangsangtai/tiny-genimage) is a REDUCED DERIVATIVE
+# of GenImage with SEVEN generators. Stable Diffusion v1.4 is absent and is NOT
+# substituted. Results must be described as Tiny GenImage results, not full-benchmark
+# GenImage results. The manifest records dataset_source accordingly.
+#
+# The manifest must be built with --preprocess so that container format (PNG for every
+# fake, JPEG for every real) and native resolution cannot separate the classes without
+# any generative evidence. See src/datasets/preprocessing.py.
+
+base_config: base.yaml
+
+data:
+  root: data
+  manifest_path: data/manifests/tiny_genimage.csv
+  split_path: data/manifests/tiny_genimage_splits.csv
+
+training:
+  epochs: 10
+  batch_size: 32
+  num_workers: 0
+  learning_rate: 0.001
+  fine_tune_mode: head_only
+  # No CUDA on the development machine; enable with mixed_precision on a GPU host.
+  mixed_precision: false
+
+reproducibility:
+  seed: 42
+  # First pass: ONE training seed. Widen only for the final reported configuration.
+  experiment_seeds: [42]
+  deterministic_algorithms: true

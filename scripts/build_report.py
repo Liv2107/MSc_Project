@@ -393,11 +393,54 @@ def report_unseen_generator(run: DiscoveredRun, output_dir: Path) -> dict[str, A
                     _save_figure(figure, output_dir / f"figure_unseen_per_generator_{metric_name}")
                 )
 
+    # Threshold-free metrics are listed first: on an unseen generator a fixed-threshold
+    # gap largely reflects calibration drift, so ROC-AUC and average precision are the
+    # defensible headline. Both test sets are prevalence matched (see the composition
+    # tables), which is what makes precision/F1/PR-AUC comparable at all.
     gap = metrics["generalisation_gap"]
+    gap_rows: list[list[Any]] = []
+    for metric_name, key in (
+        ("roc_auc (threshold-free)", "roc_auc"),
+        ("average_precision (threshold-free)", "average_precision"),
+        ("f1 @ default threshold", "f1_at_default_threshold"),
+    ):
+        entry = gap.get(key) or {}
+        gap_rows.append(
+            [
+                metric_name,
+                entry.get("in_distribution"),
+                entry.get("unseen"),
+                entry.get("absolute_drop"),
+            ]
+        )
+    selected = gap.get("f1_at_baseline_validation_selected_threshold") or {}
+    if "unseen" in selected:
+        gap_rows.append(
+            ["f1 @ validation-selected threshold", None, selected.get("unseen"), None]
+        )
     _emit_table(
-        [[gap["metric"], gap["in_distribution"], gap["unseen"], gap["absolute_drop"]]],
+        gap_rows,
         ["metric", "in_distribution", "unseen", "absolute_drop"],
         output_dir / "table_unseen_gap",
+        artefacts,
+    )
+    _emit_table(
+        [
+            ["prevalence matched", gap.get("prevalence_matched")],
+            ["unseen positive prevalence", gap.get("unseen_prevalence")],
+            ["in-distribution positive prevalence", gap.get("in_distribution_prevalence")],
+            *[
+                [f"unseen test: {key}", value]
+                for key, value in sorted((metrics.get("final_test_composition") or {}).items())
+            ],
+            *[
+                [f"threshold {name}: {field}", value]
+                for name, block in sorted((metrics.get("thresholds") or {}).items())
+                for field, value in sorted(block.items())
+            ],
+        ],
+        ["quantity", "value"],
+        output_dir / "table_unseen_test_composition_and_thresholds",
         artefacts,
     )
     return {"run_dir": str(run.run_dir), "held_out_generator": held_out, "artefacts": artefacts}
@@ -423,6 +466,21 @@ def _recovery_rows(metrics: dict[str, Any]) -> list[dict[str, Any]]:
                 "f1": overall.get("f1"),
                 "roc_auc": overall.get("roc_auc"),
                 "average_precision": overall.get("average_precision"),
+                "threshold_default": overall.get("threshold"),
+                # Threshold-free metrics are identical at every operating point; only the
+                # threshold-dependent ones change, which is exactly what separates
+                # calibration shift from weight adaptation.
+                "f1_at_adaptation_threshold": (
+                    cell.get("at_adaptation_selected_threshold") or {}
+                ).get("f1"),
+                "f1_at_baseline_threshold": (cell.get("at_baseline_threshold") or {}).get("f1"),
+                "threshold_adaptation_selected": (
+                    (cell.get("thresholds") or {}).get("adaptation_validation_selected") or {}
+                ).get("value"),
+                "threshold_baseline_unchanged": (
+                    (cell.get("thresholds") or {}).get("baseline_unchanged") or {}
+                ).get("value"),
+                "held_out_generator": cell.get("held_out_generator"),
             }
         )
     return rows
@@ -444,9 +502,14 @@ def report_fine_tuning(run: DiscoveredRun, output_dir: Path) -> dict[str, Any]:
                 row["subset_seed"],
                 row["training_seed"],
                 row["labelled_images_consumed"],
-                row["accuracy"],
-                row["f1"],
                 row["roc_auc"],
+                row["average_precision"],
+                row["threshold_default"],
+                row["f1"],
+                row["threshold_adaptation_selected"],
+                row["f1_at_adaptation_threshold"],
+                row["threshold_baseline_unchanged"],
+                row["f1_at_baseline_threshold"],
             ]
             for row in rows
         ],
@@ -457,9 +520,14 @@ def report_fine_tuning(run: DiscoveredRun, output_dir: Path) -> dict[str, Any]:
             "subset_seed",
             "training_seed",
             "labelled_images",
-            "accuracy",
-            "f1",
             "roc_auc",
+            "pr_auc",
+            "threshold_default",
+            "f1_at_default",
+            "threshold_adaptation_selected",
+            "f1_at_adaptation_threshold",
+            "threshold_baseline",
+            "f1_at_baseline_threshold",
         ],
         output_dir / "table_recovery_cells",
         artefacts,

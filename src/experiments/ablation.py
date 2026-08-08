@@ -55,6 +55,7 @@ from src.experiments.common import (
     load_manifest_with_splits,
     prepare_experiment,
     resolve_runtime_paths,
+    select_records,
 )
 from src.experiments.fine_tuning import (
     REQUIRED_FRACTIONS,
@@ -70,7 +71,10 @@ from src.experiments.fine_tuning import (
     split_adaptation_pool,
     summarise_recovery,
 )
-from src.experiments.unseen_generator import validate_unseen_protocol
+from src.experiments.unseen_generator import (
+    THRESHOLD_PROVENANCE_SEEN_VALIDATION,
+    validate_unseen_protocol,
+)
 from src.models.checkpointing import load_checkpoint
 from src.utils.config import load_config
 
@@ -286,7 +290,16 @@ def run_ablation(config_path: Path) -> Path:
     logger = logging.getLogger(f"ai_detector.{context.run_id}")
     try:
         bundle = load_manifest_with_splits(config)
-        adaptation_pool, final_test_records = build_recovery_pools(config, bundle, unseen, known)
+        adaptation_pool, final_test_records, final_test_metadata = build_recovery_pools(
+            config, bundle, unseen, known
+        )
+        seen_validation_records = select_records(
+            bundle.records,
+            bundle.split_by_id,
+            split="validation",
+            fake_generators=list(config["generators"]["validation"]),
+            include_real=bool(config["generators"].get("include_real_images", True)),
+        )
         starting = load_checkpoint(starting_checkpoint_path, map_location="cpu")
         compatibility = assert_starting_checkpoint_compatible(
             starting,
@@ -333,16 +346,21 @@ def run_ablation(config_path: Path) -> Path:
             ablation_settings["training_budget_policy"],
         )
 
-        rows: list[dict[str, Any]] = [
-            evaluate_starting_checkpoint(
-                config=config,
-                context=context,
-                starting_checkpoint_path=starting_checkpoint_path,
-                final_test_records=final_test_records,
-                fine_tune_mode=modes[0],
-            )
-        ]
-        logger.info("0%% reference f1=%.4f", rows[0]["overall"]["f1"])
+        zero_row, baseline_threshold = evaluate_starting_checkpoint(
+            config=config,
+            context=context,
+            starting_checkpoint_path=starting_checkpoint_path,
+            final_test_records=final_test_records,
+            fine_tune_mode=modes[0],
+            seen_validation_records=seen_validation_records,
+        )
+        rows: list[dict[str, Any]] = [zero_row]
+        logger.info(
+            "0%% reference f1@default=%.4f f1@baseline_threshold(%.2f)=%.4f",
+            zero_row["overall"]["f1"],
+            baseline_threshold,
+            zero_row["at_baseline_threshold"]["f1"],
+        )
 
         trainable_by_mode: dict[str, Any] = {}
         for entry in matrix:
@@ -360,6 +378,8 @@ def run_ablation(config_path: Path) -> Path:
                 fine_tune_mode=mode,
                 training_seed=int(entry["training_seed"]),
                 cell_id=str(entry["cell_id"]),
+                baseline_threshold=baseline_threshold,
+                baseline_threshold_provenance=THRESHOLD_PROVENANCE_SEEN_VALIDATION,
                 learning_rate=override.get("learning_rate"),
                 epochs=override.get("epochs"),
             )
@@ -385,6 +405,8 @@ def run_ablation(config_path: Path) -> Path:
                 record["labelled_images_consumed"],
             )
 
+        for row in rows:
+            row["held_out_generator"] = unseen
         _write_cell_table(rows, context.run_dir / "ablation_cells.csv")
         unequal_budget = sorted(mode for mode, entry in overrides.items() if "epochs" in entry)
         payload = {
@@ -403,6 +425,9 @@ def run_ablation(config_path: Path) -> Path:
                 "subset_id_digests": subset_digests,
                 "final_test_sample_id_count": len(final_test_ids),
                 "final_test_sample_ids": final_test_ids,
+                "final_test_composition": final_test_metadata,
+                "baseline_threshold": baseline_threshold,
+                "baseline_threshold_provenance": THRESHOLD_PROVENANCE_SEEN_VALIDATION,
                 "training_budget_policy": ablation_settings["training_budget_policy"],
                 "mode_overrides_applied": {
                     mode: entry for mode, entry in overrides.items() if entry

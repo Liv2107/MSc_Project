@@ -18,7 +18,24 @@ from .schema import DatasetRecord
 from .splitting import SplitAssignment, SplitFractions, create_grouped_splits
 
 DATASET_SOURCE = "genimage_arxiv_2306.08571"
+
+# Tiny GenImage (Kaggle: yangsangtai/tiny-genimage) is a REDUCED DERIVATIVE of GenImage.
+# It ships seven generator folders under their official archive names and EXCLUDES
+# Stable Diffusion v1.4 entirely. Results from it are not full-benchmark GenImage
+# results; ``TINY_GENIMAGE_DATASET_SOURCE`` records that distinction in the manifest.
+TINY_GENIMAGE_DATASET_SOURCE = "tiny_genimage_kaggle_yangsangtai_v1_subset_of_2306.08571"
+TINY_GENIMAGE_GENERATORS = (
+    "biggan",
+    "vqdm",
+    "stable_diffusion_v1_5",
+    "wukong",
+    "adm",
+    "glide",
+    "midjourney",
+)
+
 GENERATOR_ALIASES = {
+    # Display names used by the full official release.
     "midjourney": "midjourney",
     "vqdm": "vqdm",
     "wukong": "wukong",
@@ -27,8 +44,28 @@ GENERATOR_ALIASES = {
     "glide": "glide",
     "biggan": "biggan",
     "adm": "adm",
+    # Official archive directory names, as shipped by Tiny GenImage. The date stamps are
+    # part of the upstream archive names and carry no experimental meaning. ``sdv5`` is
+    # mapped explicitly to stable_diffusion_v1_5; there is no sdv4 folder in this subset
+    # and none is substituted.
+    "imagenet_ai_0419_biggan": "biggan",
+    "imagenet_ai_0419_vqdm": "vqdm",
+    "imagenet_ai_0424_sdv5": "stable_diffusion_v1_5",
+    "imagenet_ai_0424_wukong": "wukong",
+    "imagenet_ai_0508_adm": "adm",
+    "imagenet_glide": "glide",
+    "imagenet_midjourney": "midjourney",
 }
-OFFICIAL_GENERATORS = tuple(GENERATOR_ALIASES.values())
+OFFICIAL_GENERATORS = (
+    "midjourney",
+    "vqdm",
+    "wukong",
+    "stable_diffusion_v1_4",
+    "stable_diffusion_v1_5",
+    "glide",
+    "biggan",
+    "adm",
+)
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 
@@ -113,6 +150,7 @@ def build_genimage_import(
     validation_fraction_of_official_val: float = 0.5,
     seed: int = 42,
     max_per_generator_split_class: int | None = None,
+    dataset_source: str = DATASET_SOURCE,
 ) -> GenImageImportResult:
     """Index GenImage and create train/validation/test assignments.
 
@@ -121,8 +159,13 @@ def build_genimage_import(
     across generator folders are retained once using their logical relative path.
     """
 
-    root = genimage_root.resolve()
-    data_root = data_root.resolve()
+    # Normalise WITHOUT following symlinks. Large read-only datasets are commonly
+    # symlinked into data/raw/ from a cache directory (kagglehub, a scratch volume);
+    # resolving would point outside data_root and make every manifest path absolute and
+    # machine-specific. Normalising lexically keeps manifest paths relative to data_root,
+    # which is the portability property this check exists to protect.
+    root = Path(os.path.normpath(Path.cwd() / genimage_root))
+    data_root = Path(os.path.normpath(Path.cwd() / data_root))
     if not root.is_dir():
         raise FileNotFoundError(f"GenImage root not found: {root}")
     try:
@@ -228,7 +271,7 @@ def build_genimage_import(
             "label": item.label,
             "generator": item.generator,
             "source_group": item.source_group,
-            "dataset_source": DATASET_SOURCE,
+            "dataset_source": dataset_source,
             "official_split": item.official_split,
             "source_generator_folder": item.source_folder,
         }
@@ -240,7 +283,7 @@ def build_genimage_import(
                 label=item.label,
                 generator=item.generator,
                 source_group=item.source_group,
-                dataset_source=DATASET_SOURCE,
+                dataset_source=dataset_source,
             )
         )
 
@@ -273,7 +316,14 @@ def build_genimage_import(
         distribution[(split, record.generator, record.label)] += 1
     audit = {
         "dataset": "GenImage",
-        "dataset_source": DATASET_SOURCE,
+        "dataset_source": dataset_source,
+        "is_tiny_genimage_subset": dataset_source == TINY_GENIMAGE_DATASET_SOURCE,
+        "excluded_official_generators": sorted(
+            set(OFFICIAL_GENERATORS).difference(requested)
+        ),
+        "source_generator_folders": {
+            generator: discovered[generator].name for generator in sorted(requested)
+        },
         "genimage_root": str(root),
         "generators": requested,
         "seed": seed,

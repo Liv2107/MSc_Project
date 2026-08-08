@@ -214,6 +214,66 @@ Notebooks are for interactive auditing and presentation. Reusable loading, filte
 - [ ] Populate notebooks only from saved, auditable outputs.
 - [ ] Freeze dependencies and document the final compute environment.
 
+## Tiny GenImage and mandatory preprocessing
+
+The dataset in use is **Tiny GenImage** (Kaggle `yangsangtai/tiny-genimage`), a reduced
+derivative of GenImage: 35,000 images, **seven** generators, 2,000 train + 500 val per
+class per generator. **Stable Diffusion v1.4 is absent and is never substituted.**
+Results must be described as Tiny GenImage results, not full-benchmark GenImage results;
+the manifest's `dataset_source` and the audit sidecar record this.
+
+An audit of the raw subset found two shortcuts that let a detector separate the classes
+without any generative evidence:
+
+| | raw format | raw resolution |
+|---|---|---|
+| every `ai` image | **PNG** | biggan 128² · vqdm/adm/glide 256² · sdv1.5/wukong 512² · midjourney 1024² |
+| every `nature` image | **JPEG** | variable, ~500×375 |
+
+Container format alone is therefore a perfect classifier, and native resolution
+identifies the generator. The importer must consequently be run with `--preprocess`,
+which builds a deterministic cache (`src/datasets/preprocessing.py`) where every image —
+real and fake — is decoded to RGB, resized shortest-side-then-centre-crop to a common
+**256×256**, and re-encoded as **JPEG quality 95** with 4:4:4 subsampling and no
+metadata. Original files are never modified. The policy, Pillow version, and per-image
+source/output digests are written to `preprocessing_index.json`, and the policy digest
+is embedded in the manifest audit.
+
+This prevents container format and raw input dimensions from trivially identifying class
+or generator. **It does not remove all native-resolution effects:** an image generated at
+128² and upscaled still carries different high-frequency content from one generated at
+1024² and downscaled, and one JPEG pass leaves different residue on an already-JPEG real
+than on a never-compressed PNG fake. Those are properties of the source data and must be
+stated as limitations rather than claimed as neutralised.
+
+## Balanced final test sets
+
+Precision, F1, and PR-AUC all depend on class prevalence. The raw partitions would give
+250 held-out fakes against 1,750 shared reals (12.5% prevalence) for the unseen test but
+~46% for the in-distribution test, so a naive F1 comparison would report an arithmetic
+artefact as a generalisation gap.
+
+Every held-out-generator evaluation therefore uses a **balanced 50/50** final test set:
+all of that generator's test fakes plus an equal number of reals drawn deterministically
+from a **fixed real pool shared across held-out generators** (seeded by a constant that
+is deliberately independent of `reproducibility.seed`, so the pool does not move between
+runs). The in-distribution comparison set is balanced to the same size and drawn from the
+same real pool. Membership is unchanged across the 0/5/10/20/50% budgets, and its digest
+is recorded per run.
+
+## Threshold policy
+
+| condition | operating points reported | where the threshold came from |
+|---|---|---|
+| 0% unseen baseline | config default (0.5) **and** validation-selected | seen-generator validation only; zero held-out samples |
+| 5/10/20/50% | config default, **adaptation-validation-selected**, **and** the unchanged baseline threshold | adaptation validation (counts against the budget) / seen-generator validation |
+
+Reporting each adapted model at both its own operating point and the unchanged baseline
+threshold is what separates calibration shift from genuine weight adaptation. Both values
+and their provenance strings are persisted per cell. ROC-AUC and PR-AUC are reported
+throughout and are threshold-free, so they are the defensible headline on an unseen
+generator.
+
 ## Partition policy for the unseen-generator family
 
 The unseen, recovery, and ablation protocols reuse the persisted GenImage split file

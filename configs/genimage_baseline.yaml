@@ -1,4 +1,9 @@
 # In-distribution GenImage baseline using all eight official generator subsets.
+#
+# REQUIRES THE FULL OFFICIAL RELEASE. The Tiny GenImage subset on this machine has only
+# seven generators (no Stable Diffusion v1.4), so this config will fail against it and
+# v1.4 is deliberately NOT substituted. For Tiny GenImage use
+# configs/tiny_genimage_baseline.yaml instead.
 # The importer maps official train -> train and partitions official val into
 # model-selection validation plus untouched test data.
 

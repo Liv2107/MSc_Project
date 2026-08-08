@@ -1,0 +1,34 @@
+# Limited-data recovery on Tiny GenImage for held-out midjourney.
+# First pass: 1 subset seed x 1 training seed x 4 budgets = 4 adaptation cells, plus the
+# 0% reference recomputed in-run = 5 reported points.
+#
+# BEFORE RUNNING: set fine_tuning.starting_checkpoint to the best_checkpoint.pt written
+# by configs/tiny_unseen_midjourney.yaml. The runner refuses a checkpoint that held out a
+# different generator, or used a different CLIP revision or known-generator set.
+
+base_config: tiny_genimage_base.yaml
+
+experiment:
+  type: fine_tuning
+  name: tiny_recovery_midjourney
+
+generators:
+  train: [biggan, vqdm, stable_diffusion_v1_5, wukong, adm, glide]
+  validation: [biggan, vqdm, stable_diffusion_v1_5, wukong, adm, glide]
+  test: [midjourney]
+  unseen: midjourney
+  include_real_images: true
+
+fine_tuning:
+  percentages: [0.05, 0.10, 0.20, 0.50]
+  # First pass: ONE subset seed. Widen for the final reported configuration.
+  subset_seeds: [42]
+  nested_subsets: true
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  starting_checkpoint: outputs/REPLACE_WITH_TINY_UNSEEN_midjourney_RUN_DIR/best_checkpoint.pt
+  reload_starting_checkpoint_each_run: true
+  fine_tune_mode: head_only
+  # A fifth of the adaptation pool is reserved for model selection, and each budget takes
+  # its nested share of that too, so the reported budget covers the selection cost.
+  adaptation_validation_fraction: 0.2

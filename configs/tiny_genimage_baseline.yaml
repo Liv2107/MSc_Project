@@ -1,0 +1,15 @@
+# In-distribution reference over all SEVEN Tiny GenImage generators.
+# Stable Diffusion v1.4 is absent from this subset and is not substituted.
+
+base_config: tiny_genimage_base.yaml
+
+experiment:
+  type: baseline
+  name: tiny_genimage_all_seven_baseline
+
+generators:
+  train: [biggan, vqdm, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  validation: [biggan, vqdm, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  test: [biggan, vqdm, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  unseen: null
+  include_real_images: true

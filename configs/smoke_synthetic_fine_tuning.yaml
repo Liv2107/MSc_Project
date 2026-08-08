@@ -36,7 +36,7 @@ fine_tuning:
   nested_subsets: true
   adaptation_split_name: adaptation_pool
   final_test_split_name: unseen_test
-  starting_checkpoint: outputs/unseen_generator-20260808T132300095023Z-b386ea5c10-2392/best_checkpoint.pt
+  starting_checkpoint: outputs/unseen_generator-20260808T144550443491Z-b386ea5c10-bb06/best_checkpoint.pt
   reload_starting_checkpoint_each_run: true
   fine_tune_mode: head_only
   # A quarter of the adaptation pool is reserved for model selection, and each budget

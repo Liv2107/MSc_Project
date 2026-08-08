@@ -52,6 +52,7 @@ from typing import Any
 from src.datasets.detector_dataset import AIDetectionDataset
 from src.datasets.schema import DatasetRecord
 from src.evaluation.evaluator import save_predictions
+from src.evaluation.metrics import compute_binary_metrics
 from src.experiments.common import (
     ExperimentContext,
     build_data_loader,
@@ -66,7 +67,12 @@ from src.experiments.common import (
     select_records,
 )
 from src.experiments.unseen_generator import (
+    THRESHOLD_PROVENANCE_DEFAULT,
+    THRESHOLD_PROVENANCE_SEEN_VALIDATION,
     assert_pools_group_disjoint,
+    assert_unseen_absent_from_development,
+    build_balanced_final_test,
+    select_threshold_on_validation,
     validate_unseen_protocol,
 )
 from src.models.checkpointing import load_checkpoint
@@ -78,6 +84,10 @@ from src.utils.reproducibility import seed_everything
 LOGGER = logging.getLogger(__name__)
 
 REQUIRED_FRACTIONS = (0.05, 0.10, 0.20, 0.50)
+
+THRESHOLD_PROVENANCE_ADAPTATION = (
+    "selected_on_adaptation_validation_only__grid_search__counts_against_budget"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,6 +424,8 @@ def run_adaptation_cell(
     fine_tune_mode: str,
     training_seed: int,
     cell_id: str,
+    baseline_threshold: float,
+    baseline_threshold_provenance: str,
     retain_cell_checkpoints: bool = False,
     learning_rate: float | None = None,
     epochs: int | None = None,
@@ -436,11 +448,11 @@ def run_adaptation_cell(
         pools, budget.validation_sample_ids, description="adaptation validation"
     )
     for name, records in (("train", train_records), ("validation", validation_records)):
-        labels = {record.label for record in records}
-        if labels != {0, 1}:
+        present_classes = {record.label for record in records}
+        if present_classes != {0, 1}:
             raise ValueError(
-                f"adaptation {name} at fraction {budget.fraction} holds classes {labels}; "
-                "the budget is too small to contain both classes"
+                f"adaptation {name} at fraction {budget.fraction} holds classes "
+                f"{present_classes}; the budget is too small to contain both classes"
             )
     assert_pools_group_disjoint(train_records + validation_records, final_test_records)
 
@@ -493,6 +505,17 @@ def run_adaptation_cell(
     best = load_checkpoint(best_path, map_location=str(context.device))
     model.load_state_dict(best["model_state"], strict=True)
 
+    # Operating point selected on adaptation validation ONLY. Those images are part of
+    # this budget's labelled allocation, so the threshold costs nothing that is not
+    # already counted in labelled_images_consumed, and the final test stays untouched.
+    adaptation_threshold, adaptation_threshold_score = select_threshold_on_validation(
+        model=model,
+        records=validation_records,
+        config=config,
+        device=context.device,
+        metric=str(config["training"]["early_stopping"].get("metric", "f1")),
+    )
+
     outcome = evaluate_records(
         model=model,
         records=final_test_records,
@@ -505,6 +528,18 @@ def run_adaptation_cell(
     )
     predictions_path = cell_dir / "unseen_test_predictions.csv"
     save_predictions(outcome.predictions, predictions_path)
+
+    # Three operating points on the same saved scores, so a change in F1 between budgets
+    # can be attributed to weight adaptation or to calibration rather than confounding
+    # the two. `overall` stays the config default for continuity with earlier runs.
+    test_labels = [item.label for item in outcome.predictions]
+    test_scores = [item.score for item in outcome.predictions]
+    at_adaptation_threshold = compute_binary_metrics(
+        test_labels, test_scores, threshold=adaptation_threshold
+    )
+    at_baseline_threshold = compute_binary_metrics(
+        test_labels, test_scores, threshold=baseline_threshold
+    )
 
     checkpoint_digests = {
         path.name: path.with_suffix(path.suffix + ".sha256").read_text(encoding="ascii").split()[0]
@@ -530,7 +565,27 @@ def run_adaptation_cell(
         ),
         "training_seconds": training_seconds,
         "cell_checkpoint_sha256": checkpoint_digests,
+        "thresholds": {
+            "default": {
+                "value": float(config["model"]["decision_threshold"]),
+                "provenance": THRESHOLD_PROVENANCE_DEFAULT,
+            },
+            "adaptation_validation_selected": {
+                "value": adaptation_threshold,
+                "provenance": THRESHOLD_PROVENANCE_ADAPTATION,
+                "selection_score": adaptation_threshold_score,
+                "selection_sample_count": len(validation_records),
+                "counted_in_adaptation_budget": True,
+            },
+            "baseline_unchanged": {
+                "value": baseline_threshold,
+                "provenance": baseline_threshold_provenance,
+                "held_out_samples_used": 0,
+            },
+        },
         "overall": asdict(outcome.overall),
+        "at_adaptation_selected_threshold": asdict(at_adaptation_threshold),
+        "at_baseline_threshold": asdict(at_baseline_threshold),
         "per_generator": {
             name: asdict(metrics) for name, metrics in outcome.per_generator.items()
         },
@@ -552,16 +607,33 @@ def evaluate_starting_checkpoint(
     starting_checkpoint_path: Path,
     final_test_records: Sequence[DatasetRecord],
     fine_tune_mode: str,
-) -> dict[str, Any]:
+    seen_validation_records: Sequence[DatasetRecord],
+) -> tuple[dict[str, Any], float]:
     """Measure the 0% condition inside this run, with identical evaluation code.
 
     Recomputing it here rather than reading another run's JSON guarantees the recovery
     curve's origin was produced by the same code path as every adapted point.
+
+    Also derives the baseline operating threshold from SEEN-generator validation data
+    only. Every adaptation cell is additionally reported at this unchanged threshold, so
+    calibration shift can be separated from weight adaptation. Returns the 0% row and
+    that threshold.
     """
 
     model = build_detector(config, device=context.device, fine_tune_mode=fine_tune_mode)
     starting = load_checkpoint(starting_checkpoint_path, map_location=str(context.device))
     model.load_state_dict(starting["model_state"], strict=True)
+
+    # Held-out samples contribute nothing here: seen_validation_records is the
+    # known-generator validation split, asserted free of the held-out generator.
+    baseline_threshold, baseline_score = select_threshold_on_validation(
+        model=model,
+        records=seen_validation_records,
+        config=config,
+        device=context.device,
+        metric=str(config["training"]["early_stopping"].get("metric", "f1")),
+    )
+
     outcome = evaluate_records(
         model=model,
         records=final_test_records,
@@ -573,7 +645,10 @@ def evaluate_starting_checkpoint(
     save_predictions(
         outcome.predictions, context.run_dir / "zero_percent_unseen_test_predictions.csv"
     )
-    return {
+    labels = [item.label for item in outcome.predictions]
+    scores = [item.score for item in outcome.predictions]
+    at_baseline = compute_binary_metrics(labels, scores, threshold=baseline_threshold)
+    row = {
         "cell_id": "zero_percent_reference",
         "fine_tune_mode": "none",
         "adaptation_percentage": 0.0,
@@ -583,21 +658,44 @@ def evaluate_starting_checkpoint(
         "adaptation_train_count": 0,
         "adaptation_validation_count": 0,
         "labelled_images_consumed": 0,
+        "held_out_samples_used_for_fitting_or_selection": 0,
+        "thresholds": {
+            "default": {
+                "value": float(config["model"]["decision_threshold"]),
+                "provenance": THRESHOLD_PROVENANCE_DEFAULT,
+            },
+            "baseline_unchanged": {
+                "value": baseline_threshold,
+                "provenance": THRESHOLD_PROVENANCE_SEEN_VALIDATION,
+                "selection_score": baseline_score,
+                "selection_sample_count": len(seen_validation_records),
+                "held_out_samples_used": 0,
+            },
+        },
         "overall": asdict(outcome.overall),
+        "at_baseline_threshold": asdict(at_baseline),
+        # The 0% model has no adaptation validation, so there is no adaptation-selected
+        # operating point; the baseline threshold is the only legitimate one here.
+        "at_adaptation_selected_threshold": asdict(at_baseline),
         "per_generator": {
             name: asdict(metrics) for name, metrics in outcome.per_generator.items()
         },
     }
+    return row, baseline_threshold
 
 
 def build_recovery_pools(
     config: Mapping[str, Any], bundle: Any, unseen: str, known: Sequence[str]
-) -> tuple[list[DatasetRecord], list[DatasetRecord]]:
-    """Return the adaptation pool and the fixed final unseen test partition.
+) -> tuple[list[DatasetRecord], list[DatasetRecord], dict[str, Any]]:
+    """Return the adaptation pool, the fixed final unseen test partition, and its metadata.
 
     The adaptation pool is the held-out generator's official-train fakes plus the
     shared real training images, so adaptation sees new-generator evidence against the
     same negatives the detector already knows.
+
+    The final test set is built by the same balanced-50/50 fixed-real-pool routine the
+    unseen-generator runner uses, so the 0% baseline and every adaptation budget are
+    scored on byte-identical membership at identical prevalence.
     """
 
     include_real = bool(config["generators"].get("include_real_images", True))
@@ -610,12 +708,8 @@ def build_recovery_pools(
             or (record.label == 0 and include_real)
         )
     ]
-    final_test_records = select_records(
-        bundle.records,
-        bundle.split_by_id,
-        split="test",
-        fake_generators=[unseen],
-        include_real=include_real,
+    final_test_records, final_test_metadata = build_balanced_final_test(
+        bundle.records, bundle.split_by_id, unseen_generator=unseen
     )
     assert_pools_group_disjoint(adaptation_pool, final_test_records)
     if not any(record.label == 1 and record.generator == unseen for record in adaptation_pool):
@@ -624,7 +718,7 @@ def build_recovery_pools(
         )
     if not any(record.label == 1 and record.generator == unseen for record in final_test_records):
         raise ValueError(f"the final test partition contains no {unseen!r} fakes")
-    return adaptation_pool, final_test_records
+    return adaptation_pool, final_test_records, final_test_metadata
 
 
 def summarise_recovery(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -674,6 +768,7 @@ def summarise_recovery(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 def _write_cell_table(rows: Sequence[Mapping[str, Any]], destination: Path) -> None:
     columns = [
         "cell_id",
+        "held_out_generator",
         "fine_tune_mode",
         "adaptation_percentage",
         "subset_seed",
@@ -688,31 +783,55 @@ def _write_cell_table(rows: Sequence[Mapping[str, Any]], destination: Path) -> N
         "learning_rate",
         "training_seconds",
         "best_adaptation_validation_score",
+        "starting_checkpoint",
+        # Threshold-free metrics first: they do not depend on the operating point.
+        "roc_auc",
+        "average_precision",
+        "support",
+        # Threshold-dependent metrics, reported at each declared operating point.
+        "threshold_default",
         "accuracy",
         "precision",
         "recall",
         "f1",
-        "roc_auc",
-        "average_precision",
-        "support",
-        "threshold",
+        "threshold_adaptation_selected",
+        "accuracy_at_adaptation_threshold",
+        "precision_at_adaptation_threshold",
+        "recall_at_adaptation_threshold",
+        "f1_at_adaptation_threshold",
+        "threshold_baseline_unchanged",
+        "accuracy_at_baseline_threshold",
+        "precision_at_baseline_threshold",
+        "recall_at_baseline_threshold",
+        "f1_at_baseline_threshold",
+        "threshold_provenance_adaptation",
+        "threshold_provenance_baseline",
     ]
     with destination.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
         for row in rows:
             flat = {key: row.get(key) for key in columns}
-            for metric_key in (
-                "accuracy",
-                "precision",
-                "recall",
-                "f1",
-                "roc_auc",
-                "average_precision",
-                "support",
-                "threshold",
+            overall = row["overall"]
+            for metric_key in ("roc_auc", "average_precision", "support"):
+                flat[metric_key] = overall.get(metric_key)
+            for metric_key in ("accuracy", "precision", "recall", "f1"):
+                flat[metric_key] = overall.get(metric_key)
+            flat["threshold_default"] = overall.get("threshold")
+            thresholds = row.get("thresholds") or {}
+            adaptation = thresholds.get("adaptation_validation_selected") or {}
+            baseline = thresholds.get("baseline_unchanged") or {}
+            flat["threshold_adaptation_selected"] = adaptation.get("value")
+            flat["threshold_baseline_unchanged"] = baseline.get("value")
+            flat["threshold_provenance_adaptation"] = adaptation.get("provenance")
+            flat["threshold_provenance_baseline"] = baseline.get("provenance")
+            for source_key, suffix in (
+                ("at_adaptation_selected_threshold", "at_adaptation_threshold"),
+                ("at_baseline_threshold", "at_baseline_threshold"),
             ):
-                flat[metric_key] = row["overall"].get(metric_key)
+                block = row.get(source_key) or {}
+                for metric_key in ("accuracy", "precision", "recall", "f1"):
+                    flat[f"{metric_key}_{suffix}"] = block.get(metric_key)
             writer.writerow(flat)
 
 
@@ -738,6 +857,14 @@ def run_fine_tuning(config_path: Path) -> Path:
         raise ValueError(
             "fine_tuning.nested_subsets must stay true; the recovery comparison assumes it"
         )
+    if not settings.get("reload_starting_checkpoint_each_run", True):
+        # Every cell always reloads the original checkpoint. Accepting `false` would let a
+        # config claim cumulative adaptation while the code does the opposite.
+        raise ValueError(
+            "fine_tuning.reload_starting_checkpoint_each_run must be true: each budget is "
+            "an independent condition restarted from the 0% checkpoint, never a "
+            "continuation of a smaller budget"
+        )
     fine_tune_mode = str(settings.get("fine_tune_mode") or config["training"]["fine_tune_mode"])
     validation_fraction = float(settings.get("adaptation_validation_fraction", 0.25))
     starting_checkpoint_path = resolve_starting_checkpoint(config, loaded.source_path)
@@ -746,7 +873,21 @@ def run_fine_tuning(config_path: Path) -> Path:
     logger = logging.getLogger(f"ai_detector.{context.run_id}")
     try:
         bundle = load_manifest_with_splits(config)
-        adaptation_pool, final_test_records = build_recovery_pools(config, bundle, unseen, known)
+        adaptation_pool, final_test_records, final_test_metadata = build_recovery_pools(
+            config, bundle, unseen, known
+        )
+        # Seen-generator validation, used only to derive the unchanged baseline threshold.
+        seen_validation_records = select_records(
+            bundle.records,
+            bundle.split_by_id,
+            split="validation",
+            fake_generators=list(config["generators"]["validation"]),
+            include_real=bool(config["generators"].get("include_real_images", True)),
+        )
+        assert_unseen_absent_from_development(
+            {"seen_validation_for_baseline_threshold": seen_validation_records},
+            unseen_generator=unseen,
+        )
         starting = load_checkpoint(starting_checkpoint_path, map_location="cpu")
         compatibility = assert_starting_checkpoint_compatible(
             starting,
@@ -780,16 +921,22 @@ def run_fine_tuning(config_path: Path) -> Path:
             len(fractions) * len(subset_seeds) * len(training_seeds),
         )
 
-        rows: list[dict[str, Any]] = [
-            evaluate_starting_checkpoint(
-                config=config,
-                context=context,
-                starting_checkpoint_path=starting_checkpoint_path,
-                final_test_records=final_test_records,
-                fine_tune_mode=fine_tune_mode,
-            )
-        ]
-        logger.info("0%% reference f1=%.4f", rows[0]["overall"]["f1"])
+        zero_row, baseline_threshold = evaluate_starting_checkpoint(
+            config=config,
+            context=context,
+            starting_checkpoint_path=starting_checkpoint_path,
+            final_test_records=final_test_records,
+            fine_tune_mode=fine_tune_mode,
+            seen_validation_records=seen_validation_records,
+        )
+        rows: list[dict[str, Any]] = [zero_row]
+        logger.info(
+            "0%% reference roc_auc=%s f1@default=%.4f f1@baseline_threshold(%.2f)=%.4f",
+            zero_row["overall"]["roc_auc"],
+            zero_row["overall"]["f1"],
+            baseline_threshold,
+            zero_row["at_baseline_threshold"]["f1"],
+        )
         for fraction in fractions:
             for subset_seed in subset_seeds:
                 for training_seed in training_seeds:
@@ -807,15 +954,21 @@ def run_fine_tuning(config_path: Path) -> Path:
                         fine_tune_mode=fine_tune_mode,
                         training_seed=training_seed,
                         cell_id=cell_id,
+                        baseline_threshold=baseline_threshold,
+                        baseline_threshold_provenance=THRESHOLD_PROVENANCE_SEEN_VALIDATION,
                     )
                     rows.append(cell.record)
                     logger.info(
-                        "cell %s f1=%.4f (labelled images %d)",
+                        "cell %s roc_auc=%s f1@adapt_t=%.4f f1@baseline_t=%.4f (labelled %d)",
                         cell_id,
-                        cell.record["overall"]["f1"],
+                        cell.record["overall"]["roc_auc"],
+                        cell.record["at_adaptation_selected_threshold"]["f1"],
+                        cell.record["at_baseline_threshold"]["f1"],
                         cell.record["labelled_images_consumed"],
                     )
 
+        for row in rows:
+            row["held_out_generator"] = unseen
         _write_cell_table(rows, context.run_dir / "recovery_cells.csv")
         summary = summarise_recovery(rows)
         payload = {
@@ -829,6 +982,10 @@ def run_fine_tuning(config_path: Path) -> Path:
             "adaptation_validation_fraction": validation_fraction,
             "adaptation_pool_size": len(adaptation_pool),
             "final_unseen_test_size": len(final_test_records),
+            "final_test_composition": final_test_metadata,
+            "final_test_sample_ids": sorted(record.sample_id for record in final_test_records),
+            "baseline_threshold": baseline_threshold,
+            "baseline_threshold_provenance": THRESHOLD_PROVENANCE_SEEN_VALIDATION,
             "manifest_sha256": bundle.manifest_sha256,
             "starting_checkpoint_compatibility": compatibility,
             "adaptation_subsets_path": str(subset_path),
