@@ -23,11 +23,17 @@ fine_tuning:
   nested_subsets: true
   adaptation_split_name: adaptation_pool
   final_test_split_name: unseen_test
-  # TODO: Point to the compatible 0%-adaptation/known-generator checkpoint.
-  starting_checkpoint: checkpoints/REPLACE_WITH_BASELINE_CHECKPOINT.pt
+  # Must be the best_checkpoint.pt written by the matching unseen-generator run: the
+  # recovery curve is measured relative to that run's 0% result. The runner refuses a
+  # checkpoint trained on a different CLIP revision, held-out generator, or known
+  # generator set, so an incomparable starting point fails fast rather than quietly.
+  starting_checkpoint: outputs/REPLACE_WITH_UNSEEN_RUN_DIRECTORY/best_checkpoint.pt
   reload_starting_checkpoint_each_run: true
   fine_tune_mode: head_only
-  # TODO: Define grouped adaptation train/validation policy for tiny subsets.
+  # Predeclared small-data selection policy: the adaptation pool is split ONCE,
+  # group-safely and per class, into adaptation-train and adaptation-validation pools.
+  # Every percentage then takes nested prefixes of BOTH, so the reported budget covers
+  # model selection as well as fitting and the final test partition is never consulted.
   adaptation_validation_fraction: 0.2
 
 training:
@@ -37,7 +43,11 @@ training:
 
 # IMPLEMENTATION CHECKLIST
 # [ ] Replace/check starting checkpoint, manifest hash, and split identity.
-# [ ] Save nested subset IDs and actual counts for every subset seed.
-# [ ] Keep adaptation validation and final test completely separate.
-# [ ] Reload identical starting weights for each independent percentage/seed run.
-# [ ] Evaluate the same final-test IDs and combine results with the measured 0% run.
+# [x] Save nested subset IDs and actual counts for every subset seed.
+# [x] Keep adaptation validation and final test completely separate.
+# [x] Reload identical starting weights for each independent percentage/seed run.
+# [x] Evaluate the same final-test IDs and combine results with the measured 0% run.
+#
+# GRID SIZE: 4 percentages x 3 subset seeds x 3 training seeds = 36 fitted models per
+# held-out generator. Shorten subset_seeds/experiment_seeds while developing and state
+# the final grid in the dissertation.

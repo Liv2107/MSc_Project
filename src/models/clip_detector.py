@@ -133,15 +133,36 @@ class CLIPBinaryDetector(nn.Module):
 
 
 def _last_vision_block(backbone: CLIPVisionBackbone) -> nn.Module:
+    """Locate the final transformer block across supported transformers layouts.
+
+    transformers <5 nested the tower as ``vision_model.encoder.layers``; transformers 5
+    flattened ``CLIPVisionModel`` so the same layers live at ``encoder.layers``. Both
+    are probed, most-nested first, so the freeze policy is layout independent.
+    """
+
     encoder = backbone.encoder
     candidates: list[Any] = [
         getattr(getattr(getattr(encoder, "vision_model", None), "encoder", None), "layers", None),
+        getattr(getattr(encoder, "encoder", None), "layers", None),
         getattr(encoder, "layers", None),
     ]
     for layers in candidates:
         if layers is not None and len(layers) > 0:
             return cast(nn.Module, layers[-1])
     raise ValueError("cannot locate the final vision transformer block")
+
+
+def _post_layernorm(backbone: CLIPVisionBackbone) -> nn.Module | None:
+    """Find the pooled-output layer norm under either transformers layout."""
+
+    encoder = backbone.encoder
+    for candidate in (
+        getattr(getattr(encoder, "vision_model", None), "post_layernorm", None),
+        getattr(encoder, "post_layernorm", None),
+    ):
+        if candidate is not None:
+            return cast(nn.Module, candidate)
+    return None
 
 
 def configure_trainable_layers(model: CLIPBinaryDetector, mode: FineTuneMode | str) -> None:
@@ -156,9 +177,7 @@ def configure_trainable_layers(model: CLIPBinaryDetector, mode: FineTuneMode | s
     if selected_mode == FineTuneMode.LAST_BLOCK:
         for parameter in _last_vision_block(model.backbone).parameters():
             parameter.requires_grad = True
-        post_norm = getattr(
-            getattr(model.backbone.encoder, "vision_model", None), "post_layernorm", None
-        )
+        post_norm = _post_layernorm(model.backbone)
         if post_norm is not None:
             for parameter in post_norm.parameters():
                 parameter.requires_grad = True

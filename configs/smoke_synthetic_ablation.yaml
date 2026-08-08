@@ -1,0 +1,71 @@
+# ============================================================================
+# PIPELINE SMOKE TEST -- NOT A RESEARCH CONFIGURATION
+# ============================================================================
+# Fine-tuning-depth ablation against the SYNTHETIC fixture. Reduced to one subset
+# seed and one training seed (3 modes x 4 budgets = 12 cells) so all three freeze
+# depths can be verified on CPU. Research runs use the full seed lists.
+#
+# last_block and full adaptation get a smaller learning rate: the shared 1e-3 used
+# for the linear head would wreck pretrained CLIP weights. That makes the budget
+# unequal in learning rate but not in epochs, and the runner records the override
+# in ablation_metrics.json as a fairness caveat.
+#
+# Metrics from this config are NOT research results.
+# ============================================================================
+
+base_config: base.yaml
+
+experiment:
+  type: ablation
+  name: SMOKE_synthetic_depth_ablation
+
+data:
+  root: data
+  manifest_path: data/manifests/smoke_synthetic.csv
+  split_path: data/manifests/smoke_synthetic_splits.csv
+
+generators:
+  train: [midjourney, stable_diffusion_v1_4, adm]
+  validation: [midjourney, stable_diffusion_v1_4, adm]
+  test: [biggan]
+  unseen: biggan
+  include_real_images: true
+
+fine_tuning:
+  percentages: [0.05, 0.10, 0.20, 0.50]
+  subset_seeds: [42]
+  nested_subsets: true
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  starting_checkpoint: outputs/unseen_generator-20260808T132300095023Z-b386ea5c10-2392/best_checkpoint.pt
+  reload_starting_checkpoint_each_run: true
+  adaptation_validation_fraction: 0.25
+
+ablation:
+  modes: [head_only, last_block, full]
+  control_starting_checkpoint: true
+  control_subset_ids: true
+  control_final_test_ids: true
+  training_budget_policy: equal_epochs
+  record_trainable_parameter_names: true
+  record_training_time: true
+
+mode_overrides:
+  head_only: null
+  last_block:
+    learning_rate: 0.00002
+  full:
+    learning_rate: 0.00001
+
+reproducibility:
+  seed: 42
+  experiment_seeds: [42]
+  deterministic_algorithms: true
+
+training:
+  fine_tune_mode: head_only
+  epochs: 4
+  batch_size: 16
+  learning_rate: 0.001
+  mixed_precision: false
+  num_workers: 0

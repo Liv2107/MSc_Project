@@ -1,0 +1,42 @@
+# ============================================================================
+# PIPELINE SMOKE TEST -- NOT A RESEARCH CONFIGURATION
+# ============================================================================
+# Runs the full baseline chain against the SYNTHETIC GenImage-layout fixture
+# produced by scripts/make_synthetic_smoke_data.py. Its purpose is to prove that
+# import -> manifest -> group-safe splits -> CLIP detector -> training ->
+# checkpoint selection -> untouched test evaluation -> metrics actually executes.
+#
+# Metrics from this config describe procedurally generated images. They are NOT
+# detector performance and must never be reported in the dissertation.
+#
+# Real runs use configs/genimage_baseline.yaml against the official release.
+# ============================================================================
+
+base_config: base.yaml
+
+experiment:
+  type: baseline
+  name: SMOKE_synthetic_baseline
+
+data:
+  root: data
+  manifest_path: data/manifests/smoke_synthetic.csv
+  split_path: data/manifests/smoke_synthetic_splits.csv
+
+generators:
+  train: [midjourney, stable_diffusion_v1_4, adm, biggan]
+  validation: [midjourney, stable_diffusion_v1_4, adm, biggan]
+  test: [midjourney, stable_diffusion_v1_4, adm, biggan]
+  unseen: null
+  include_real_images: true
+
+training:
+  fine_tune_mode: head_only
+  epochs: 6
+  batch_size: 16
+  # A linear head over frozen CLIP features on ~136 fixture images needs a larger
+  # step than the research default; this value is a smoke-test convenience only.
+  learning_rate: 0.001
+  # No CUDA on the development machine, so autocast/GradScaler would be inert.
+  mixed_precision: false
+  num_workers: 0

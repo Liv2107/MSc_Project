@@ -4,9 +4,20 @@ This repository implements the first vertical slice of an MSc Computer Science d
 
 > How well do AI image detectors generalise to unseen image generators, and how effectively can they recover performance through limited fine-tuning?
 
-It contains no research dataset, trained research model, numerical result, or dissertation conclusion. The Week 1 baseline pipeline is implemented and tested; unseen-generator, limited-data recovery, ablation, and reporting code remains staged for later work.
+All four experiment protocols — baseline, unseen-generator, limited-data recovery, and
+fine-tuning-depth ablation — plus the plotting and reporting layer are implemented and
+tested. The repository still contains **no research dataset, no trained research model,
+and no numerical result**: GenImage must be downloaded manually (see `data/GENIMAGE.md`),
+and until it is, the only runnable data is a synthetic fixture used to verify the
+pipeline (see *Verifying the pipeline without GenImage* below).
 
 The scaffold targets **Python 3.11 or newer** (it uses modern typing and `StrEnum`). Choose and document one exact Python version for the final environment rather than assuming all 3.11+ environments are numerically identical.
+
+The pipeline has been executed end to end on Python 3.11.15 with torch 2.13.0 and
+transformers 5.14.1 (CPU). Both transformers 4.x and 5.x vision-tower layouts are
+supported by the freeze-policy code, because transformers 5 flattened
+`CLIPVisionModel` and moved the transformer blocks from `vision_model.encoder.layers`
+to `encoder.layers`.
 
 ## Why the repository is organised this way
 
@@ -87,7 +98,12 @@ To add a dataset or generator:
 
 Fine-tuning percentages must be sampled from a separate adaptation pool, preferably with nested subsets (5% contained within 10%, etc.) and repeated seeds. They must never be percentages of the final test set.
 
-## Week 1 commands
+The unseen, fine-tuning, and ablation configs are runnable. `configs/unseen_generator.yaml`
+and `configs/fine_tuning.yaml` still carry `generator_a`…`generator_d` placeholders that
+must be replaced with validated manifest names, and `fine_tuning.starting_checkpoint`
+must point at the checkpoint produced by the unseen-generator run.
+
+## Commands
 
 Install the environment, copy and populate `data/manifest_template.csv`, validate it and create persisted splits, then run the baseline:
 
@@ -98,9 +114,72 @@ python main.py --config configs/baseline.yaml
 python -m pytest
 ```
 
-Before running, replace the placeholder generator names in `configs/baseline.yaml` with names that exactly match the validated manifest. The other experiment configurations intentionally remain unavailable until their protocol runners are implemented.
+Before running, replace the placeholder generator names in `configs/baseline.yaml` with names that exactly match the validated manifest.
 
-When implemented, each run should create a unique output directory containing the resolved config, seed, environment information, split/manifest identity, sample-level predictions, aggregate metrics, logs, and checkpoint reference. That bundle is the minimum audit trail for a dissertation result.
+### The full study, in order
+
+Each step consumes the previous step's checkpoint, so the order is not optional.
+
+```powershell
+# 1. Import GenImage (see data/GENIMAGE.md for acquisition and licence terms).
+python -m scripts.import_genimage
+
+# 2. In-distribution reference.
+python main.py --config configs/genimage_baseline.yaml
+
+# 3. Leave-one-generator-out. This produces the 0%-adaptation reference point.
+#    Repeat once per held-out generator, editing generators.unseen/test each time.
+python main.py --config configs/unseen_generator.yaml
+
+# 4. Limited-data recovery. Set fine_tuning.starting_checkpoint to the
+#    best_checkpoint.pt written by step 3 before running.
+python main.py --config configs/fine_tuning.yaml
+
+# 5. Fine-tuning-depth ablation, using the same starting checkpoint as step 4.
+python main.py --config configs/ablation.yaml
+
+# 6. Generate Chapter 4 tables and figures from whatever runs completed.
+python -m scripts.build_report --output outputs/report
+```
+
+Every run creates a unique output directory containing the resolved config, seed,
+environment information, split/manifest identity, sample-level predictions, aggregate
+metrics, logs, and checkpoint references with SHA-256 digests (`artefacts.json`). That
+bundle is the minimum audit trail for a dissertation result.
+
+**Grid cost.** Steps 4 and 5 are grids: 4 percentages x subset seeds x training seeds,
+times 3 modes for the ablation. With the declared three-seed lists that is 36 and 108
+fitted models respectively, per held-out generator. Reduce `fine_tuning.subset_seeds`
+and `reproducibility.experiment_seeds` while developing, and state the final grid in
+the dissertation. Each cell's own checkpoints are deleted after its predictions are
+saved (their SHA-256 digests are retained in the metrics file); a full CLIP checkpoint
+is ~350 MB, so keeping every cell's weights would cost tens of gigabytes and none of
+the reported results depend on them.
+
+### Verifying the pipeline without GenImage
+
+`scripts/make_synthetic_smoke_data.py` writes procedurally generated images into the
+official GenImage folder layout so the entire chain can be executed before the real
+release is downloaded. The three "training" generators share one artefact family and
+the held-out generator's artefact differs in kind, which produces a real generalisation
+gap and therefore a recovery curve with something to recover.
+
+```powershell
+python -m scripts.make_synthetic_smoke_data --overwrite
+python -m scripts.import_genimage --genimage-root data/raw/genimage_synthetic --data-root data `
+    --manifest data/manifests/smoke_synthetic.csv --splits data/manifests/smoke_synthetic_splits.csv
+python main.py --config configs/smoke_synthetic_baseline.yaml
+python main.py --config configs/smoke_synthetic_unseen.yaml
+# Point the two configs below at the best_checkpoint.pt from the unseen run above.
+python main.py --config configs/smoke_synthetic_fine_tuning.yaml
+python main.py --config configs/smoke_synthetic_ablation.yaml
+python -m scripts.build_report --output outputs/report
+```
+
+**These are not results.** The images are synthetic, the configs are named
+`smoke_synthetic_*`, the experiment names are prefixed `SMOKE_`, and
+`scripts/build_report.py` prints a warning banner when a reported run came from one.
+Their only purpose is to prove the mechanism runs and the leakage assertions fire.
 
 ## Reproducibility and common failure modes
 
@@ -128,7 +207,33 @@ Notebooks are for interactive auditing and presentation. Reusable loading, filte
 - [x] Unit-test metrics against hand-calculated examples.
 - [x] Pass a tiny-batch overfitting test before full training.
 - [x] Implement checkpoint save/load and resolved-config logging.
-- [ ] Run baseline, unseen-generator, fine-tuning, and ablation protocols in order.
+- [x] Implement baseline, unseen-generator, fine-tuning, and ablation protocol runners.
+- [x] Implement the plotting and report-generation layer.
+- [ ] Run the four protocols in order on the real GenImage release.
 - [ ] Repeat experiments across declared seeds.
 - [ ] Populate notebooks only from saved, auditable outputs.
 - [ ] Freeze dependencies and document the final compute environment.
+
+## Partition policy for the unseen-generator family
+
+The unseen, recovery, and ablation protocols reuse the persisted GenImage split file
+unchanged, so every experiment draws from identical samples. Their logical partitions
+are derived from it:
+
+| Partition | Derivation | Used for |
+|---|---|---|
+| development train | split `train`, fakes limited to known generators, plus shared reals | gradient steps |
+| development validation | split `validation`, same generator limit | checkpoint and threshold selection |
+| adaptation pool | split `train`, fakes from the held-out generator only, plus shared reals | recovery budgets |
+| final unseen test | split `test`, fakes from the held-out generator, plus the fixed real test pool | scored once per selected model |
+
+Because the importer refuses source groups that cross the official train/val boundary,
+the adaptation pool and the final unseen test are provenance disjoint by construction.
+Both that and the absence of held-out fakes from every development selection are
+asserted at runtime, not assumed. The held-out generator's official-`val` fakes are
+deliberately left unused, and their count is recorded in the run's metrics file.
+
+Model selection during recovery is paid for out of the labelled budget: the adaptation
+pool is split once into adaptation-train and adaptation-validation pools, and each
+percentage takes its nested share of both. The reported `labelled_images_consumed`
+therefore covers selection as well as fitting.

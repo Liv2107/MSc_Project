@@ -1,0 +1,45 @@
+# ============================================================================
+# PIPELINE SMOKE TEST -- NOT A RESEARCH CONFIGURATION
+# ============================================================================
+# Leave-one-generator-out against the SYNTHETIC fixture. Holds out biggan, whose
+# periodic artefact frequency differs from every training generator, so the
+# protocol's leakage assertions and generalisation-gap arithmetic are exercised
+# on data where a real drop is possible.
+#
+# Metrics from this config are NOT research results.
+# ============================================================================
+
+base_config: base.yaml
+
+experiment:
+  type: unseen_generator
+  name: SMOKE_synthetic_unseen_biggan
+
+data:
+  root: data
+  manifest_path: data/manifests/smoke_synthetic.csv
+  split_path: data/manifests/smoke_synthetic_splits.csv
+
+generators:
+  train: [midjourney, stable_diffusion_v1_4, adm]
+  validation: [midjourney, stable_diffusion_v1_4, adm]
+  test: [biggan]
+  unseen: biggan
+  include_real_images: true
+
+unseen_protocol:
+  # In this partition policy the adaptation pool is the held-out generator's whole
+  # official-train slice; the final test partition comes from the official val
+  # slice, so the two are already provenance disjoint. See the runner docstring.
+  adaptation_fraction: 1.0
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  fixed_real_test_pool: true
+
+training:
+  fine_tune_mode: head_only
+  epochs: 6
+  batch_size: 16
+  learning_rate: 0.001
+  mixed_precision: false
+  num_workers: 0

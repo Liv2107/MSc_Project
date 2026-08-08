@@ -1,0 +1,57 @@
+# ============================================================================
+# PIPELINE SMOKE TEST -- NOT A RESEARCH CONFIGURATION
+# ============================================================================
+# Limited-data recovery against the SYNTHETIC fixture. The grid is deliberately
+# small (2 subset seeds x 1 training seed = 8 cells plus the 0% reference) so the
+# protocol can be verified quickly on CPU. Research runs use the full seed lists
+# declared in configs/fine_tuning.yaml.
+#
+# starting_checkpoint must point at the best checkpoint from the matching
+# smoke unseen-generator run; replace the run directory below after re-running it.
+#
+# Metrics from this config are NOT research results.
+# ============================================================================
+
+base_config: base.yaml
+
+experiment:
+  type: fine_tuning
+  name: SMOKE_synthetic_recovery_biggan
+
+data:
+  root: data
+  manifest_path: data/manifests/smoke_synthetic.csv
+  split_path: data/manifests/smoke_synthetic_splits.csv
+
+generators:
+  train: [midjourney, stable_diffusion_v1_4, adm]
+  validation: [midjourney, stable_diffusion_v1_4, adm]
+  test: [biggan]
+  unseen: biggan
+  include_real_images: true
+
+fine_tuning:
+  percentages: [0.05, 0.10, 0.20, 0.50]
+  subset_seeds: [42, 123]
+  nested_subsets: true
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  starting_checkpoint: outputs/unseen_generator-20260808T132300095023Z-b386ea5c10-2392/best_checkpoint.pt
+  reload_starting_checkpoint_each_run: true
+  fine_tune_mode: head_only
+  # A quarter of the adaptation pool is reserved for model selection, and each budget
+  # takes its nested share of that too, so the reported budget covers selection cost.
+  adaptation_validation_fraction: 0.25
+
+reproducibility:
+  seed: 42
+  experiment_seeds: [42]
+  deterministic_algorithms: true
+
+training:
+  fine_tune_mode: head_only
+  epochs: 6
+  batch_size: 16
+  learning_rate: 0.001
+  mixed_precision: false
+  num_workers: 0
