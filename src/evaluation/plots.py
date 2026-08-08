@@ -425,6 +425,7 @@ def plot_fine_tuning_recovery(
     )
 
     counts_by_percentage: dict[float, set[int]] = {}
+    held_out_by_percentage: dict[float, set[int]] = {}
     for mode in modes:
         mode_rows = [row for row in adapted if str(row["fine_tune_mode"]) == mode]
         percentages = sorted({float(row["adaptation_percentage"]) for row in mode_rows})
@@ -450,6 +451,11 @@ def plot_fine_tuning_recovery(
                     consumed = row.get("labelled_images_consumed")
                     if consumed is not None:
                         counts_by_percentage.setdefault(percentage, set()).add(int(consumed))
+                    held_out_count = row.get("held_out_fake_count")
+                    if held_out_count is not None:
+                        held_out_by_percentage.setdefault(percentage, set()).add(
+                            int(held_out_count)
+                        )
             axes.scatter(
                 [percentage * 100] * len(cells),
                 cells,
@@ -474,21 +480,49 @@ def plot_fine_tuning_recovery(
     percentages_present = sorted({float(row["adaptation_percentage"]) for row in adapted})
     tick_positions = [percentage * 100 for percentage in percentages_present]
     tick_labels = []
+
+    def _range_text(values: set[int]) -> str | None:
+        ordered = sorted(values)
+        if not ordered:
+            return None
+        return str(ordered[0]) if len(ordered) == 1 else f"{ordered[0]}-{ordered[-1]}"
+
     for percentage in percentages_present:
-        counts = sorted(counts_by_percentage.get(percentage, set()))
-        if len(counts) == 1:
-            tick_labels.append(f"{percentage * 100:g}%\n(n={counts[0]})")
-        elif counts:
-            tick_labels.append(f"{percentage * 100:g}%\n(n={counts[0]}-{counts[-1]})")
+        total = _range_text(counts_by_percentage.get(percentage, set()))
+        held_out = _range_text(held_out_by_percentage.get(percentage, set()))
+        # The adaptation pool mixes held-out-generator images with shared authentic ones,
+        # so a bare "n=" beside a percentage invites reading the mixed total as the number
+        # of new-generator images. Name both when both are known.
+        if held_out is not None and total is not None:
+            tick_labels.append(f"{percentage * 100:g}%\n{held_out} held-out\n({total} total)")
+        elif total is not None:
+            tick_labels.append(f"{percentage * 100:g}%\n(n={total})")
         else:
             tick_labels.append(f"{percentage * 100:g}%")
     axes.set_xticks(tick_positions, labels=tick_labels)
     # Keep the axis inside the observed budgets so no trend is implied beyond them.
     axes.set_xlim(min(tick_positions) - 2, max(tick_positions) + 2)
     axes.set_ylim(0.0, 1.0)
-    axes.set_xlabel("Labelled adaptation data (% of adaptation pool, actual image counts shown)")
+    # The axis label must describe exactly what the ticks show. Runs recorded before the
+    # per-class counts existed only carry the mixed total, and claiming otherwise would
+    # invite reading that total as a count of new-generator images.
+    if held_out_by_percentage:
+        axis_label = (
+            "Labelled adaptation budget (% of adaptation pool; counts are held-out-"
+            "generator images, then all labelled images including shared authentic ones)"
+        )
+    else:
+        axis_label = (
+            "Labelled adaptation budget (% of adaptation pool; n = ALL labelled images, "
+            "held-out-generator and shared authentic combined)"
+        )
+    axes.set_xlabel(axis_label)
     axes.set_ylabel(metric_name)
-    axes.set_title(f"Recovery on the held-out generator ({metric_name})")
+    held_out_names = sorted(
+        {str(row["held_out_generator"]) for row in adapted if row.get("held_out_generator")}
+    )
+    subject = ", ".join(held_out_names) if held_out_names else "the held-out generator"
+    axes.set_title(f"Recovery on held-out {subject} ({metric_name})")
     axes.legend(loc="lower right", fontsize=8, frameon=False, title="Fine-tune depth")
     return figure, axes
 

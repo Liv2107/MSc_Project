@@ -440,6 +440,8 @@ def run_unseen_generator(config_path: Path) -> Path:
             checkpoint_metric=str(config["training"]["checkpoint_metric"]),
             resolved_config=config,
             seed=context.seed,
+            logger=logger,
+            progress_label=f"unseen[{unseen}]",
         )
         best_checkpoint_path = Path(result["best_checkpoint"])
         best_checkpoint = load_checkpoint(best_checkpoint_path, map_location=str(context.device))

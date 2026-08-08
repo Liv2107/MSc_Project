@@ -206,6 +206,8 @@ def run_baseline(config_path: Path) -> Path:
             checkpoint_metric=str(config["training"]["checkpoint_metric"]),
             resolved_config=config,
             seed=context.seed,
+            logger=logger,
+            progress_label="baseline",
         )
         best_checkpoint = load_checkpoint(
             Path(result["best_checkpoint"]), map_location=str(context.device)

@@ -455,6 +455,12 @@ def run_adaptation_cell(
                 f"{present_classes}; the budget is too small to contain both classes"
             )
     assert_pools_group_disjoint(train_records + validation_records, final_test_records)
+    # The adaptation pool mixes held-out-generator fakes with shared authentic images, so
+    # a bare percentage is ambiguous. Record both counts: the held-out count is the one a
+    # reader means by "labelled images from the new generator".
+    budget_records = train_records + validation_records
+    held_out_fake_count = sum(1 for record in budget_records if record.label == 1)
+    authentic_count = sum(1 for record in budget_records if record.label == 0)
 
     model = build_detector(config, device=context.device, fine_tune_mode=fine_tune_mode)
     starting = load_checkpoint(starting_checkpoint_path, map_location=str(context.device))
@@ -499,6 +505,8 @@ def run_adaptation_cell(
         checkpoint_metric=str(config["training"]["checkpoint_metric"]),
         resolved_config=config,
         seed=training_seed,
+        logger=logger,
+        progress_label=f"cell[{cell_id}]",
     )
     training_seconds = time.perf_counter() - started
     best_path = Path(result["best_checkpoint"])
@@ -554,6 +562,8 @@ def run_adaptation_cell(
         "training_seed": training_seed,
         "starting_checkpoint": str(starting_checkpoint_path),
         **budget.describe(),
+        "held_out_fake_count": held_out_fake_count,
+        "authentic_count": authentic_count,
         "best_epoch": result["best_epoch"],
         "best_adaptation_validation_score": result["best_score"],
         "trainable_parameters": model.trainability_summary.get("trainable_parameters"),
@@ -658,6 +668,8 @@ def evaluate_starting_checkpoint(
         "adaptation_train_count": 0,
         "adaptation_validation_count": 0,
         "labelled_images_consumed": 0,
+        "held_out_fake_count": 0,
+        "authentic_count": 0,
         "held_out_samples_used_for_fitting_or_selection": 0,
         "thresholds": {
             "default": {
@@ -730,6 +742,11 @@ def summarise_recovery(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         grouped.setdefault(key, []).append(row)
     zero = next((row for row in rows if float(row["adaptation_percentage"]) == 0.0), None)
     baseline_f1 = float(zero["overall"]["f1"]) if zero else None
+    baseline_by_metric: dict[str, float | None] = {}
+    if zero:
+        for name in ("f1", "accuracy", "roc_auc", "average_precision"):
+            value = zero["overall"].get(name)
+            baseline_by_metric[name] = None if value is None else float(value)
     summary = []
     for (mode, fraction), cells in sorted(grouped.items()):
         for metric in ("f1", "accuracy", "roc_auc", "average_precision"):
@@ -759,8 +776,9 @@ def summarise_recovery(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                     {int(cell.get("labelled_images_consumed") or 0) for cell in cells}
                 ),
             }
-            if metric == "f1" and baseline_f1 is not None:
-                entry["recovery_vs_zero_percent"] = mean - baseline_f1
+            baseline_value = baseline_by_metric.get(metric)
+            if baseline_value is not None:
+                entry["recovery_vs_zero_percent"] = mean - baseline_value
             summary.append(entry)
     return {"zero_percent_f1": baseline_f1, "rows": summary}
 
@@ -776,6 +794,8 @@ def _write_cell_table(rows: Sequence[Mapping[str, Any]], destination: Path) -> N
         "adaptation_train_count",
         "adaptation_validation_count",
         "labelled_images_consumed",
+        "held_out_fake_count",
+        "authentic_count",
         "trainable_parameters",
         "total_parameters",
         "best_epoch",

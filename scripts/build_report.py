@@ -460,6 +460,8 @@ def _recovery_rows(metrics: dict[str, Any]) -> list[dict[str, Any]]:
                 "subset_seed": cell.get("subset_seed"),
                 "training_seed": cell.get("training_seed"),
                 "labelled_images_consumed": cell.get("labelled_images_consumed"),
+                "held_out_fake_count": cell.get("held_out_fake_count"),
+                "authentic_count": cell.get("authentic_count"),
                 "trainable_parameters": cell.get("trainable_parameters"),
                 "training_seconds": cell.get("training_seconds"),
                 "accuracy": overall.get("accuracy"),
@@ -501,6 +503,7 @@ def report_fine_tuning(run: DiscoveredRun, output_dir: Path) -> dict[str, Any]:
                 row["adaptation_percentage"],
                 row["subset_seed"],
                 row["training_seed"],
+                row["held_out_fake_count"],
                 row["labelled_images_consumed"],
                 row["roc_auc"],
                 row["average_precision"],
@@ -519,7 +522,8 @@ def report_fine_tuning(run: DiscoveredRun, output_dir: Path) -> dict[str, Any]:
             "percentage",
             "subset_seed",
             "training_seed",
-            "labelled_images",
+            "held_out_images",
+            "labelled_images_total",
             "roc_auc",
             "pr_auc",
             "threshold_default",
@@ -562,10 +566,24 @@ def report_fine_tuning(run: DiscoveredRun, output_dir: Path) -> dict[str, Any]:
         output_dir / "table_recovery_summary",
         artefacts,
     )
-    for metric_name in ("f1", "roc_auc"):
-        if any(row.get(metric_name) is not None for row in rows):
-            figure, _ = plot_fine_tuning_recovery(rows, metric_name=metric_name)
-            artefacts.extend(_save_figure(figure, output_dir / f"figure_recovery_{metric_name}"))
+    held_out = str(metrics.get("held_out_generator") or "unknown")
+    # One figure per reported quantity. The threshold-dependent ones are plotted at EVERY
+    # declared operating point, because that is what separates a calibration change from a
+    # genuine ranking improvement; a single F1 curve cannot distinguish them.
+    for metric_name, description in (
+        ("roc_auc", "threshold-free"),
+        ("average_precision", "threshold-free"),
+        ("f1", "at the fixed 0.5 prior"),
+        ("f1_at_adaptation_threshold", "at the adaptation-validation threshold"),
+        ("f1_at_baseline_threshold", "at the unchanged baseline threshold"),
+    ):
+        if not any(row.get(metric_name) is not None for row in rows):
+            continue
+        figure, axes = plot_fine_tuning_recovery(rows, metric_name=metric_name)
+        axes.set_title(f"Recovery on held-out {held_out}: {metric_name} ({description})")
+        artefacts.extend(
+            _save_figure(figure, output_dir / f"figure_recovery_{held_out}_{metric_name}")
+        )
     return {
         "run_dir": str(run.run_dir),
         "held_out_generator": metrics.get("held_out_generator"),

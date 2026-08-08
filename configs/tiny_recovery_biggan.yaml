@@ -26,7 +26,9 @@ fine_tuning:
   nested_subsets: true
   adaptation_split_name: adaptation_pool
   final_test_split_name: unseen_test
-  starting_checkpoint: outputs/REPLACE_WITH_TINY_UNSEEN_biggan_RUN_DIR/best_checkpoint.pt
+  # From the completed tiny_unseen_biggan run (status: completed, best epoch 9,
+  # unseen ROC-AUC 0.9284 on the balanced 500-sample biggan test set).
+  starting_checkpoint: outputs/unseen_generator-20260808T151948963300Z-c74c3e0db3-363b/best_checkpoint.pt
   reload_starting_checkpoint_each_run: true
   fine_tune_mode: head_only
   # A fifth of the adaptation pool is reserved for model selection, and each budget takes

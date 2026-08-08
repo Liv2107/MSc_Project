@@ -17,16 +17,23 @@ def configure_logging(*, run_id: str, log_path: Path, verbose: bool = False) -> 
     for handler in list(logger.handlers):
         handler.close()
         logger.removeHandler(handler)
-    formatter = logging.Formatter(
+    # The FILE keeps the full, unambiguous audit record: absolute timestamp, run id, and
+    # level on every line.
+    file_formatter = logging.Formatter(
         fmt=f"%(asctime)s | {run_id} | %(levelname)s | %(name)s | %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
+    # The CONSOLE is for a human watching a long run, so it drops what is constant for the
+    # whole run. The run id appeared twice per line (literally and as the logger name),
+    # which pushed the actual message off the right of the terminal.
+    console_formatter = logging.Formatter(fmt="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(file_formatter)
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(console_formatter)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+    logger.info("run %s | log file %s", run_id, log_path)
     return logger
 
 
