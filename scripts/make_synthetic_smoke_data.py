@@ -47,6 +47,11 @@ GENERATOR_FOLDERS: dict[str, dict[str, Any]] = {
 }
 
 
+# Fixed per-split offsets. Python's hash() on strings is salted per process, so using it
+# here would make the "deterministic" fixture differ between runs.
+SPLIT_OFFSETS = {"train": 1, "val": 2}
+
+
 def _coordinate_grid(size: int) -> tuple[np.ndarray, np.ndarray]:
     axis = np.linspace(0.0, 1.0, size, dtype=np.float64)
     return np.meshgrid(axis, axis, indexing="xy")
@@ -119,7 +124,7 @@ def build_synthetic_tree(
     real_counts = {"train": train_real, "val": val_real}
     for official_split, count in real_counts.items():
         for index in range(count):
-            rng = np.random.default_rng([seed, 0, hash(official_split) % 10_000, index])
+            rng = np.random.default_rng([seed, 0, SPLIT_OFFSETS[official_split], index])
             _save(
                 _real_image(size, rng),
                 shared_real / official_split / f"nature_{official_split}_{index:05d}.png",
@@ -132,7 +137,7 @@ def build_synthetic_tree(
         for official_split, count in fake_counts.items():
             for index in range(count):
                 rng = np.random.default_rng(
-                    [seed, folder_index, hash(official_split) % 10_000, index]
+                    [seed, folder_index, SPLIT_OFFSETS[official_split], index]
                 )
                 _save(
                     _fake_image(size, rng, parameters),

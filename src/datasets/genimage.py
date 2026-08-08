@@ -155,8 +155,11 @@ def build_genimage_import(
     """Index GenImage and create train/validation/test assignments.
 
     Official ``train`` remains training data. Official ``val`` is divided into
-    model-selection validation and untouched test data. Repeated nature images
-    across generator folders are retained once using their logical relative path.
+    model-selection validation and untouched test data. Repeated nature images across
+    generator folders are retained exactly once, deduplicated by file CONTENT so that
+    the same photograph shipped under different filenames is not counted twice.
+    Deduplication happens before splitting, so a repeated photograph can never be
+    assigned to two partitions.
     """
 
     # Normalise WITHOUT following symlinks. Large read-only datasets are commonly
@@ -194,8 +197,17 @@ def build_genimage_import(
         raise FileNotFoundError(f"requested GenImage folders are missing: {', '.join(missing)}")
 
     indexed: list[_IndexedImage] = []
-    real_by_logical_path: dict[tuple[str, str], _IndexedImage] = {}
+    # Authentic images are keyed by CONTENT, not by filename. GenImage repeats the same
+    # ImageNet photographs across generator subsets, and Tiny GenImage additionally ships
+    # some of them under DIFFERENT filenames in different generator folders. Keying on the
+    # logical path therefore missed real duplicates, which then surfaced much later as a
+    # hard failure in the manifest audit. Content keying subsumes the path-based rule
+    # (identical path plus identical bytes gives the same digest) and removes each
+    # photograph exactly once. Two files sharing a name but differing in content are now
+    # simply two distinct photographs, which is the correct reading.
+    real_by_content: dict[str, _IndexedImage] = {}
     duplicate_real_files = 0
+    cross_official_split_duplicates: list[str] = []
     for generator in requested:
         folder = discovered[generator]
         for official_split in ("train", "val"):
@@ -204,16 +216,17 @@ def build_genimage_import(
                 for path in _images_below(class_root):
                     relative_within_class = path.relative_to(class_root).as_posix()
                     if label == 0:
-                        logical_key = (official_split, relative_within_class.casefold())
-                        existing = real_by_logical_path.get(logical_key)
+                        digest = _content_sha256(path)
+                        existing = real_by_content.get(digest)
                         if existing is not None:
-                            if (
-                                path.stat().st_size != existing.path.stat().st_size
-                                or _content_sha256(path) != _content_sha256(existing.path)
-                            ):
-                                raise ValueError(
-                                    "nature files share a logical path but differ in content: "
-                                    f"{existing.path} and {path}"
+                            # Deduplicating happens BEFORE splitting, so a repeated photo
+                            # can never land in two partitions. A repeat spanning the
+                            # official train/val boundary is still recorded, because it
+                            # means the upstream release itself overlaps its own splits.
+                            if existing.official_split != official_split:
+                                cross_official_split_duplicates.append(
+                                    f"{existing.path.name}({existing.official_split})"
+                                    f"~{path.name}({official_split})"
                                 )
                             duplicate_real_files += 1
                             continue
@@ -237,7 +250,7 @@ def build_genimage_import(
                     )
                     indexed.append(item)
                     if label == 0:
-                        real_by_logical_path[logical_key] = item
+                        real_by_content[digest] = item
 
     grouped: dict[tuple[str, int, str], list[_IndexedImage]] = defaultdict(list)
     for item in indexed:
@@ -331,6 +344,8 @@ def build_genimage_import(
         "max_per_generator_split_class": max_per_generator_split_class,
         "sample_count": len(rows),
         "deduplicated_repeated_nature_files": duplicate_real_files,
+        "nature_deduplication_key": "sha256_of_file_content",
+        "deduplicated_across_official_split_boundary": cross_official_split_duplicates,
         "split_counts": dict(sorted(split_counts.items())),
         "distribution": [
             {"split": split, "generator": generator, "label": label, "count": count}
