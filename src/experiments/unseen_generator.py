@@ -1,41 +1,26 @@
 """Leave-one-generator-out generalisation experiment.
 
-###############################################################################
-RESEARCH QUESTION
-###############################################################################
+Train on the known generators and evaluate on a held-out generator that is absent from
+training and from model selection. The drop relative to the in-distribution reference
+estimates how well the learned cues transfer to a new generation process.
 
-Train on generators A/B/C and evaluate on generator D, which is absent from training
-and model-selection data. A performance drop relative to the baseline estimates how
-well learned cues transfer to a new generation process. Repeating D across generators
-distinguishes a general pattern from one unusually easy or difficult generator.
+The persisted split file is used unchanged, so every run draws from identical samples.
+The protocol's partitions are derived from it:
 
-The unseen test needs real negatives under a declared comparison policy. Keep that
-real pool fixed where appropriate, and disclose that generator-wise test sets may
-therefore share negatives.
+* development train      -- split ``train``, fakes restricted to the known generators,
+                            plus the shared real pool.
+* development validation -- split ``validation``, same restriction. Used for checkpoint
+                            selection and the decision threshold.
+* adaptation pool        -- split ``train``, fakes from the held-out generator only.
+                            Untouched here; it exists for the recovery experiment.
+* final unseen test      -- split ``test``, fakes from the held-out generator plus the
+                            fixed real test pool.
 
-###############################################################################
-PARTITION POLICY
-###############################################################################
+Because the importer guarantees that no ``source_group`` crosses the official train/val
+boundary, the adaptation pool and the final unseen test are provenance disjoint. Both
+that and the absence of held-out fakes from development are asserted at runtime.
 
-The persisted GenImage split file is used unchanged so that the baseline and every
-unseen/recovery run draw from identical samples. The protocol's logical partitions
-are derived from it, which is what keeps them disjoint by construction:
-
-* development train      = split ``train``, fakes restricted to the known generators
-                           plus the shared real pool.
-* development validation = split ``validation``, same generator restriction. Used for
-                           checkpoint selection and the decision threshold.
-* adaptation pool        = split ``train``, fakes from the held-out generator only.
-                           Never touched by this runner; it exists for the recovery
-                           experiment, which is why it must stay out of the test set.
-* final unseen test      = split ``test``, fakes from the held-out generator plus the
-                           fixed real test pool.
-
-Because the importer guarantees that no ``source_group`` crosses the official
-train/val boundary, the adaptation pool and the final unseen test are provenance
-disjoint. Both facts are asserted at runtime rather than assumed.
-
-The result this runner saves is the 0%-adaptation point of the recovery curve.
+The result saved here is the 0%-adaptation point of the recovery curve.
 """
 
 from __future__ import annotations
@@ -625,13 +610,3 @@ def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) 
         logger.exception("unseen generator experiment failed")
         finalise_run(context, status="failed")
         raise
-
-
-# IMPLEMENTATION CHECKLIST
-# [x] Assert held-out generator exclusion from every model-development partition.
-# [x] Keep adaptation and final unseen test pools disjoint by provenance group.
-# [x] Document and fix the real-image comparison pool.
-# [x] Reuse identical model/training settings for comparable baseline and unseen runs.
-# [x] Save the zero-shot/0%-adaptation prediction table for each seed/generator.
-# [ ] Repeat each declared generator as held out before generalising conclusions.
-#     (Driven by running this config once per held-out generator; see configs/.)

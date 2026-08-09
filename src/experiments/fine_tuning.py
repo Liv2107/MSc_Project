@@ -1,38 +1,16 @@
 """Limited-data fine-tuning recovery experiment.
 
-###############################################################################
-RESEARCH QUESTION
-###############################################################################
+How much can the detector recover on an unseen generator using limited labelled data
+from it? Budgets are 5%, 10%, 20%, and 50% of a predefined adaptation pool, never of the
+final test set. Sample counts are reported alongside the percentages, because identical
+percentages can represent very different amounts of evidence.
 
-After performance on an unseen generator is measured, how much can the detector
-recover using limited labelled data from that generator? The planned budgets are
-5%, 10%, 20%, and 50% of a *predefined adaptation pool*, never the final test set.
+Limited labelled data has to cover model selection too, so the adaptation pool is split
+once, group-safely, into adaptation-train and adaptation-validation pools. Each budget
+takes nested prefixes from both. The reported budget therefore covers every labelled
+image the run consumed, and the 5% subsets sit inside the 10% subsets.
 
-Why these values:
-    5% tests very-low-data adaptation; 10% tests whether modest evidence is enough;
-    20% reveals whether improvement continues beyond the smallest budgets; and 50%
-    provides a substantial-but-still-limited reference. Actual sample counts must be
-    reported because identical percentages can represent very different evidence.
-
-Nested subsets (5% contained in 10%, etc.) reduce one source of comparison noise.
-Repeated subset seeds remain important because which examples are labelled can matter
-as much as the nominal percentage.
-
-###############################################################################
-SMALL-DATA MODEL SELECTION (PREDECLARED)
-###############################################################################
-
-Limited labelled data has to cover model selection too; borrowing a large clean
-validation set would measure a budget the experiment does not actually have. The
-adaptation pool is therefore split ONCE, group-safely, into an adaptation-train pool
-and an adaptation-validation pool. Each budget then takes nested prefixes from BOTH
-pools, so:
-
-* the reported budget covers every labelled image the run consumed, selection included;
-* 5% train data is contained in 10% train data, and likewise for validation data;
-* the final unseen test partition is never read during fitting or selection.
-
-Every cell reloads the same untouched starting checkpoint. Budgets are independent
+Every cell reloads the same untouched starting checkpoint: the budgets are independent
 conditions, not a continual-learning sequence.
 """
 
@@ -1021,13 +999,3 @@ def run_fine_tuning(config_path: Path) -> Path:
         logger.exception("fine-tuning recovery experiment failed")
         finalise_run(context, status="failed")
         raise
-
-
-# IMPLEMENTATION CHECKLIST
-# [x] Partition adaptation and final test pools before sampling percentages.
-# [x] Build, save, and test nested 5/10/20/50% ID sets across subset seeds.
-# [x] Reload identical starting weights for every independent condition.
-# [x] Define small-data validation/early-stopping without final-test leakage.
-# [x] Hold final test, real pool, metric, and threshold policy constant.
-# [x] Report actual counts plus subset/training seed variability.
-# [x] Include the measured 0% condition in recovery plots.

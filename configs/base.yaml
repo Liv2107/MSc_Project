@@ -1,13 +1,6 @@
-# PURPOSE
-# Shared defaults for every experiment. Research configurations belong in version
-# control because they make changes to data, optimisation, transforms, and evaluation
-# visible in review. Every run should save a fully resolved copy after inheritance.
-#
-# IMPLEMENTATION ORDER
-# 1. Replace placeholder paths and generator names only after the manifest is audited.
-# 2. Validate every field in src/utils/config.py.
-# 3. Run shape/schema dry checks before any expensive training.
-# 4. Freeze final study configs rather than editing them between reported runs.
+# Shared defaults for every experiment. Configurations live in version control because
+# they make changes to data, optimisation, transforms, and evaluation visible in review.
+# Every run saves a fully resolved copy after inheritance.
 
 project:
   name: ai_image_detector_generalisation
@@ -15,7 +8,7 @@ project:
   checkpoint_root: checkpoints
 
 data:
-  # Keep paths relative to one documented repository/config root for portability.
+  # Paths are relative to one documented repository/config root, for portability.
   root: data
   manifest_path: data/manifests/dataset.csv
   split_path: data/manifests/splits.csv
@@ -55,8 +48,8 @@ transforms:
 training:
   epochs: 10
   batch_size: 32
-  # Start at zero for a reliable Windows baseline. Raise only after worker-safe IO
-  # and deterministic seeding have been verified on the target machine.
+  # Zero for a reliable Windows baseline. Raise only after worker-safe IO and
+  # deterministic seeding have been verified on the target machine.
   num_workers: 0
   learning_rate: 0.00001
   weight_decay: 0.01
@@ -83,18 +76,11 @@ evaluation:
   roc_curve: true
   precision_recall_curve: true
   per_generator: true
-  # TODO: Decide whether a fake-generator slice is paired with a fixed real test pool.
+  # Each fake-generator slice is scored against the fixed real test pool, so
+  # generator-wise numbers share negatives and stay comparable to one another.
   generator_evaluation_policy: pair_with_fixed_real_pool
 
 reproducibility:
   seed: 42
   experiment_seeds: [42, 123, 456]
   deterministic_algorithms: true
-
-# IMPLEMENTATION CHECKLIST
-# [ ] Confirm all paths resolve under the documented root.
-# [x] Pin the model to an immutable revision.
-# [x] Verify transform values against the exact chosen processor.
-# [ ] Tune hyperparameters using training/validation only and freeze them in configs.
-# [ ] Confirm worker count and mixed precision on the target Windows/GPU environment.
-# [ ] Save resolved YAML and environment metadata with every run.

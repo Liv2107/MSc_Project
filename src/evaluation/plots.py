@@ -1,32 +1,15 @@
-"""Publication-quality plotting interfaces built from evaluated data.
+"""Plotting interfaces built from evaluated data.
 
-###############################################################################
-PURPOSE
-###############################################################################
+Figures are deterministic views of saved predictions and history, never a place where
+metrics are quietly recalculated under different conventions.
 
-Figures should be deterministic views of saved predictions/history, never locations
-where metrics are secretly recalculated with different conventions. Each function
-should accept explicit data and return a Matplotlib Figure/Axes so notebooks decide
-when and where to save or display it.
-
-Use accessible colours, readable fonts, labelled axes, sample counts, uncertainty
-where available, and vector output (PDF/SVG) for dissertation inclusion. Do not use
-3D charts or truncate axes in ways that exaggerate recovery.
-
-###############################################################################
-CONVENTIONS THESE FUNCTIONS HOLD TO
-###############################################################################
-
-* No function calls ``show``, no function writes a file, and no function mutates
-  global Matplotlib state. Each returns ``(Figure, Axes)`` for the caller to place.
-* Metrics are never recomputed here. Values arrive already computed from saved
-  predictions, so a figure can always be traced back to a prediction table.
-* Undefined values (one-class ROC-AUC, for instance) are omitted and annotated as
-  undefined. They are never silently drawn as zero, which would read as "very bad"
-  instead of "not measurable".
-* Axes covering a metric in [0, 1] are drawn on the full range, so a recovery curve
-  cannot be exaggerated by cropping.
-* Sample support is shown wherever unequal support could mislead.
+No function calls ``show``, writes a file, or mutates global Matplotlib state; each
+returns ``(Figure, Axes)`` for the caller to place. Metrics arrive already computed, so
+a figure can always be traced back to a prediction table. Undefined values, such as a
+one-class ROC-AUC, are omitted and annotated rather than drawn as zero, which would read
+as "very bad" instead of "not measurable". Axes covering a metric in [0, 1] use the full
+range so a recovery curve cannot be exaggerated by cropping, and sample support is shown
+wherever unequal support could mislead.
 """
 
 from __future__ import annotations
@@ -525,13 +508,3 @@ def plot_fine_tuning_recovery(
     axes.set_title(f"Recovery on held-out {subject} ({metric_name})")
     axes.legend(loc="lower right", fontsize=8, frameon=False, title="Fine-tune depth")
     return figure, axes
-
-
-# IMPLEMENTATION CHECKLIST
-# [x] Implement plots only after metric and output schemas are stable.
-# [x] Unit-test validation and smoke-test returned Figure/Axes objects.
-# [x] Use consistent real/fake and generator colour conventions.
-# [x] Show supports, repeated seeds, and uncertainty where available.
-# [x] Export vector and high-resolution raster figures with run IDs.
-#     (Exporting is the caller's job; scripts/build_report.py writes PDF plus PNG.)
-# [x] Verify every plotted number traces to a saved prediction/history file.

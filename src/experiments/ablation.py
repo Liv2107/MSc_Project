@@ -1,43 +1,19 @@
 """Fine-tuning-depth ablation experiment.
 
-###############################################################################
-RESEARCH QUESTION
-###############################################################################
+Does recovery require changing CLIP broadly, or is a lightweight classifier update
+enough? Three modes are compared: ``head_only`` tests whether the frozen features
+already separate the new source, ``last_block`` whether limited high-level adaptation
+suffices, and ``full`` maximum adaptability at higher compute and overfitting risk.
 
-Does recovery require changing CLIP broadly, or can a lightweight classifier update
-adapt existing features? Compare:
+Only the trainable layers differ. The runner reuses the recovery experiment's own cell
+runner so the data path cannot drift between the two, and asserts the controls declared
+in ``configs/ablation.yaml``: one identical starting checkpoint per cell, byte-identical
+adaptation subset IDs across modes, one fixed final-test record set, and a recorded
+training budget whose mode-specific overrides are flagged as fairness caveats. The run
+matrix is written to disk before execution, so the intended grid is auditable
+independently of what completed.
 
-- ``head_only``: tests whether existing CLIP features already separate the new source.
-- ``last_block``: tests whether limited high-level representation adaptation suffices.
-- ``full``: tests maximum adaptability, with higher compute and overfitting risk.
-
-Only the trainable layers should differ. Reuse the same starting checkpoint, subset
-IDs, test samples, seeds, selection metric, and—unless explicitly studying it—training
-budget. Learning rates may need mode-specific values, but if so they must be tuned by
-a predeclared validation procedure and reported as part of the comparison.
-
-###############################################################################
-HOW FAIRNESS IS ENFORCED HERE
-###############################################################################
-
-The ablation deliberately reuses the recovery experiment's own cell runner, so the
-data path cannot drift between the two experiments. On top of that it asserts, rather
-than assumes, the controls declared in ``configs/ablation.yaml``:
-
-* ``control_starting_checkpoint`` -- every cell reloads one identical checkpoint file.
-* ``control_subset_ids``          -- the adaptation subsets are built once and each
-                                     mode is handed the byte-identical ID lists.
-* ``control_final_test_ids``      -- one fixed final-test record set scores every cell.
-* ``training_budget_policy``      -- recorded, and any mode-specific override is
-                                     flagged in the output as a fairness caveat.
-
-The full run matrix is written to disk before execution so the intended grid is
-auditable independently of what completed.
-
-Interpretation warning carried into the output: head-only success implies the frozen
-features already separate the new generator; last-block gains imply high-level
-adaptation is needed; full-model gains imply wider change helps, while full-model
-UNDER-performance is at least as likely to reflect small-data overfitting or
+Full-model under-performance is at least as likely to reflect small-data overfitting or
 optimisation difficulty as a lack of capacity.
 """
 
@@ -456,13 +432,3 @@ def run_ablation(config_path: Path) -> Path:
         logger.exception("fine-tuning depth ablation failed")
         finalise_run(context, status="failed")
         raise
-
-
-# IMPLEMENTATION CHECKLIST
-# [x] Freeze the ablation run matrix and shared subset/checkpoint identities.
-# [x] Verify trainable names/counts for head-only, last-block, and full modes.
-# [x] Recreate optimiser and reload starting weights for every condition.
-# [x] Define fair training/selection budget and any mode-specific hyperparameter policy.
-# [x] Evaluate identical final-test IDs with identical metric semantics.
-# [x] Report compute and variation across both subset and training seeds.
-# [x] Separate representational conclusions from optimisation/overfitting explanations.

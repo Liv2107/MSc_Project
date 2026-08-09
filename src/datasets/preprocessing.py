@@ -1,49 +1,29 @@
 """Deterministic re-encoding cache that removes format and spatial shortcuts.
 
-###############################################################################
-WHY THIS EXISTS
-###############################################################################
+An audit of Tiny GenImage found two shortcuts that let a detector separate the classes
+without looking at generative artefacts at all. Every ``ai`` image is PNG and every
+``nature`` image is JPEG, so compression artefacts appear in exactly one class and file
+format alone is a perfect classifier. Fakes are also square and generator-specific
+(BigGAN 128, VQDM/ADM/GLIDE 256, SDv1.5/Wukong 512, Midjourney 1024) while reals are
+variable and roughly 500x375, so raw dimensions identify both the class and, among
+fakes, the generator.
 
-An audit of Tiny GenImage found two shortcuts that let a detector separate the
-classes without looking at generative artefacts at all:
+This module writes a preprocessed cache in which every image, real and fake, has been
+decoded to RGB, resized under one policy, and re-encoded with identical JPEG settings.
+Training and evaluation read the cache, so neither shortcut survives into the input.
 
-1. **Format.** Every ``ai`` image is PNG; every ``nature`` image is JPEG. JPEG
-   compression artefacts therefore appear in exactly one class, so file format alone
-   is a perfect classifier.
-2. **Native resolution.** Fakes are square and generator-specific (BigGAN 128,
-   VQDM/ADM/GLIDE 256, SDv1.5/Wukong 512, Midjourney 1024) while reals are variable
-   and roughly 500x375. Raw input dimensions therefore identify both the class and,
-   among fakes, the generator.
+It does not remove all native-resolution effects: an image generated at 128x128 and
+upscaled still carries different high-frequency content from one generated at 1024x1024
+and downscaled, and a single JPEG pass leaves different residue on an already-JPEG real
+than on a never-compressed PNG fake. Those are genuine properties of the source data,
+and the dissertation must say so rather than claim they have been neutralised.
 
-This module writes a preprocessed *cache* in which every image -- real and fake --
-has been decoded to RGB, resized under one policy, and re-encoded with identical JPEG
-settings. Training and evaluation then read the cache, so neither shortcut survives
-into the model's input.
-
-###############################################################################
-WHAT THIS DOES AND DOES NOT ACHIEVE
-###############################################################################
-
-It prevents *raw input dimensions and container format* from trivially identifying
-class or generator. It does **not** remove all native-resolution effects: an image
-generated at 128x128 and upscaled to 256x256 still carries different high-frequency
-content from one generated at 1024x1024 and downscaled, and a single JPEG pass leaves
-different residue on an already-JPEG real than on a never-compressed PNG fake. Those
-are genuine properties of the source data, and the dissertation must say so rather
-than claim resolution and compression have been neutralised.
-
-###############################################################################
-GUARANTEES
-###############################################################################
-
-* Original dataset files are never modified; the cache is written elsewhere.
-* Deterministic: identical inputs and policy always produce byte-identical outputs.
-  Resampling filter, resize policy, JPEG quality, subsampling, and metadata stripping
-  are all pinned, and no random state is used.
-* Auditable: a JSON sidecar records the policy, the library versions that performed
-  the encoding, and per-image source and output digests.
-* Idempotent and resumable: an image whose cached output already matches the recorded
-  digest is skipped, so an interrupted run can be re-run safely.
+Original dataset files are never modified; the cache is written elsewhere. The process
+is deterministic (resampling filter, resize policy, JPEG quality, subsampling, and
+metadata stripping are pinned, and no random state is used), auditable (a JSON sidecar
+records the policy, the library versions that did the encoding, and per-image source and
+output digests), and resumable (an image whose cached output already matches the
+recorded digest is skipped).
 """
 
 from __future__ import annotations

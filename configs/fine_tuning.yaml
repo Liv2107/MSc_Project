@@ -1,6 +1,8 @@
-# PURPOSE
 # Measure recovery after limited labelled exposure to the previously unseen generator.
 # Percentages refer only to its persisted adaptation pool, never its final test set.
+#
+# Grid size: 4 percentages x 3 subset seeds x 3 training seeds = 36 fitted models per
+# held-out generator. Shorten subset_seeds/experiment_seeds while developing.
 
 base_config: base.yaml
 
@@ -16,8 +18,8 @@ generators:
   include_real_images: true
 
 fine_tuning:
-  # 5% probes very-low-data recovery; 10% modest exposure; 20% an intermediate
-  # regime; 50% a substantial but still limited reference. Always report counts.
+  # 5% probes very-low-data recovery; 10% modest exposure; 20% an intermediate regime;
+  # 50% a substantial but still limited reference. Always report counts alongside.
   percentages: [0.05, 0.10, 0.20, 0.50]
   subset_seeds: [42, 123, 456]
   nested_subsets: true
@@ -30,24 +32,13 @@ fine_tuning:
   starting_checkpoint: outputs/REPLACE_WITH_UNSEEN_RUN_DIRECTORY/best_checkpoint.pt
   reload_starting_checkpoint_each_run: true
   fine_tune_mode: head_only
-  # Predeclared small-data selection policy: the adaptation pool is split ONCE,
-  # group-safely and per class, into adaptation-train and adaptation-validation pools.
-  # Every percentage then takes nested prefixes of BOTH, so the reported budget covers
-  # model selection as well as fitting and the final test partition is never consulted.
+  # The adaptation pool is split once, group-safely and per class, into
+  # adaptation-train and adaptation-validation pools. Every percentage takes nested
+  # prefixes of both, so the reported budget covers model selection as well as fitting
+  # and the final test partition is never consulted.
   adaptation_validation_fraction: 0.2
 
 training:
   epochs: 5
   learning_rate: 0.00001
   fine_tune_mode: head_only
-
-# IMPLEMENTATION CHECKLIST
-# [ ] Replace/check starting checkpoint, manifest hash, and split identity.
-# [x] Save nested subset IDs and actual counts for every subset seed.
-# [x] Keep adaptation validation and final test completely separate.
-# [x] Reload identical starting weights for each independent percentage/seed run.
-# [x] Evaluate the same final-test IDs and combine results with the measured 0% run.
-#
-# GRID SIZE: 4 percentages x 3 subset seeds x 3 training seeds = 36 fitted models per
-# held-out generator. Shorten subset_seeds/experiment_seeds while developing and state
-# the final grid in the dissertation.

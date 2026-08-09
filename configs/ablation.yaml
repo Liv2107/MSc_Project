@@ -1,6 +1,8 @@
-# PURPOSE
 # Compare how much of CLIP must change to recover on the unseen generator. Only the
 # declared adaptation depth should differ across paired conditions.
+#
+# Grid size: 3 modes x 4 percentages x 3 subset seeds x 3 training seeds = 108 fitted
+# models per held-out generator. Reduce the seed lists while developing.
 
 base_config: fine_tuning.yaml
 
@@ -22,24 +24,14 @@ ablation:
   record_trainable_parameter_names: true
   record_training_time: true
 
-# Optional mode-specific optimisation belongs here only if validated fairly. Leaving
-# values null means use the shared training settings, which is the fair default.
-# Only learning_rate and epochs may be overridden. Note that a shared learning rate
-# tuned for a linear head is usually far too large for last_block or full adaptation,
-# so a predeclared per-mode rate is often the more honest choice; whichever is used is
-# recorded in ablation_metrics.json. Overriding epochs breaks the equal-epoch budget
-# and is reported as a fairness caveat under controls.budget_policy_violated_by.
+# Mode-specific optimisation belongs here only if validated fairly. Null means use the
+# shared training settings, which is the fair default. Only learning_rate and epochs may
+# be overridden. A shared learning rate tuned for a linear head is usually far too large
+# for last_block or full adaptation, so a predeclared per-mode rate is often the more
+# honest choice; whichever is used is recorded in ablation_metrics.json. Overriding
+# epochs breaks the equal-epoch budget and is reported as a fairness caveat under
+# controls.budget_policy_violated_by.
 mode_overrides:
   head_only: null
   last_block: null
   full: null
-
-# IMPLEMENTATION CHECKLIST
-# [x] Validate all three modes against the exact CLIP module structure.
-# [x] Confirm identical checkpoint/subset/test IDs across paired conditions.
-# [x] Log trainable parameter names/counts and fresh optimiser groups for every mode.
-# [x] Freeze a fair training-budget and hyperparameter-selection policy.
-# [x] Report performance variation and compute cost without inventing conclusions.
-#
-# GRID SIZE: 3 modes x 4 percentages x 3 subset seeds x 3 training seeds = 108 fitted
-# models per held-out generator. Reduce the seed lists while developing.
