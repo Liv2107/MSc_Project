@@ -331,15 +331,21 @@ def select_threshold_on_validation(
     return best_threshold, best_value
 
 
-def run_unseen_generator(config_path: Path) -> Path:
-    """Train without one generator and evaluate its untouched final partition."""
+def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) -> Path:
+    """Train without one generator and evaluate its untouched final partition.
+
+    ``resume_from`` names the output directory of an interrupted run of this same
+    config; training continues from its last completed epoch. The held-out partitions
+    are rebuilt deterministically from the persisted split file, so resuming cannot
+    change which samples the final evaluation scores.
+    """
 
     loaded = load_config(config_path)
     if loaded.values["experiment"]["type"] != "unseen_generator":
         raise ValueError("run_unseen_generator requires experiment.type=unseen_generator")
     config = resolve_runtime_paths(loaded.values, loaded.source_path)
     unseen, known = validate_unseen_protocol(config)
-    context = prepare_experiment(config)
+    context = prepare_experiment(config, resume_run_dir=resume_from)
     logger = logging.getLogger(f"ai_detector.{context.run_id}")
     try:
         bundle = load_manifest_with_splits(config)
@@ -442,6 +448,7 @@ def run_unseen_generator(config_path: Path) -> Path:
             seed=context.seed,
             logger=logger,
             progress_label=f"unseen[{unseen}]",
+            resume=resume_from is not None,
         )
         best_checkpoint_path = Path(result["best_checkpoint"])
         best_checkpoint = load_checkpoint(best_checkpoint_path, map_location=str(context.device))

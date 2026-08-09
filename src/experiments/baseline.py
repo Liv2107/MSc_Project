@@ -82,12 +82,20 @@ def _resolve_runtime_paths(values: Mapping[str, Any], source_path: Path) -> dict
     return resolved
 
 
-def run_baseline(config_path: Path) -> Path:
+def run_baseline(config_path: Path, *, resume_from: Path | None = None) -> Path:
+    """Train and evaluate the in-distribution reference.
+
+    ``resume_from`` names the output directory of an interrupted run of this same
+    config; training then continues from its last completed epoch instead of starting
+    over. Everything after training -- test scoring, metrics, finalisation -- is
+    unchanged, because it depends only on the selected checkpoint.
+    """
+
     loaded = load_config(config_path)
     if loaded.values["experiment"]["type"] != "baseline":
         raise ValueError("run_baseline requires experiment.type=baseline")
     config = _resolve_runtime_paths(loaded.values, loaded.source_path)
-    context = prepare_experiment(config)
+    context = prepare_experiment(config, resume_run_dir=resume_from)
     logger = logging.getLogger(f"ai_detector.{context.run_id}")
     try:
         train_transform = build_transforms(config, training=True)
@@ -208,6 +216,7 @@ def run_baseline(config_path: Path) -> Path:
             seed=context.seed,
             logger=logger,
             progress_label="baseline",
+            resume=resume_from is not None,
         )
         best_checkpoint = load_checkpoint(
             Path(result["best_checkpoint"]), map_location=str(context.device)

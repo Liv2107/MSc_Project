@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import yaml
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
@@ -93,7 +94,63 @@ class CLIPImageTransform:
         return (tensor - self.mean) / self.std
 
 
-def prepare_experiment(config: Mapping[str, Any]) -> ExperimentContext:
+def _prepare_resumed_run(run_dir: Path, config: Mapping[str, Any]) -> None:
+    """Check that ``run_dir`` is an interrupted run of exactly this configuration.
+
+    Resuming into a directory whose config has drifted would silently splice two
+    different experiments into one audit bundle, so every mismatch is refused. The
+    original ``resolved_config.yaml`` and ``environment.json`` are never rewritten; the
+    environment of each resumed segment is appended to ``resume_events.json`` instead,
+    because a run continued on a different machine or library version must be able to
+    say so.
+    """
+
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"cannot resume: run directory not found: {run_dir}")
+    resolved_path = run_dir / "resolved_config.yaml"
+    if not resolved_path.is_file():
+        raise FileNotFoundError(
+            f"cannot resume: {resolved_path} is missing, so the interrupted run's "
+            "configuration cannot be verified"
+        )
+    saved = yaml.safe_load(resolved_path.read_text(encoding="utf-8"))
+    if saved != json.loads(json.dumps(dict(config), default=str)):
+        raise ValueError(
+            f"cannot resume: the configuration has changed since {run_dir.name} started. "
+            "Resuming would attribute epochs trained under one configuration to another; "
+            "start a new run instead."
+        )
+    status_path = run_dir / "status.json"
+    if status_path.is_file():
+        status = json.loads(status_path.read_text(encoding="utf-8")).get("status")
+        if status == "completed":
+            raise ValueError(
+                f"cannot resume: {run_dir.name} already completed. Re-running it would "
+                "overwrite a finished result; start a new run instead."
+            )
+    events_path = run_dir / "resume_events.json"
+    events: list[dict[str, Any]] = []
+    if events_path.is_file():
+        loaded_events = json.loads(events_path.read_text(encoding="utf-8"))
+        if isinstance(loaded_events, list):
+            events = list(loaded_events)
+    events.append({"environment": collect_environment_metadata()})
+    temporary = run_dir / "resume_events.json.tmp"
+    temporary.write_text(json.dumps(events, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(temporary, events_path)
+
+
+def prepare_experiment(
+    config: Mapping[str, Any], *, resume_run_dir: Path | None = None
+) -> ExperimentContext:
+    """Seed, create or reopen the run directory, and start run-scoped logging.
+
+    With ``resume_run_dir`` the existing directory is reopened instead of a new one
+    created, so the interrupted run's checkpoints, log, and resolved config stay in one
+    bundle. Everything else -- seeding, device selection, the returned context -- is
+    identical either way.
+    """
+
     validate_config(config)
     seed = int(config["reproducibility"]["seed"])
     deterministic = bool(config["reproducibility"].get("deterministic_algorithms", True))
@@ -101,17 +158,24 @@ def prepare_experiment(config: Mapping[str, Any]) -> ExperimentContext:
     config_text = json.dumps(config, sort_keys=True, default=str).encode("utf-8")
     config_hash = hashlib.sha256(config_text).hexdigest()
     experiment_type = str(config["experiment"]["type"])
-    run_id = make_run_id(experiment_type=experiment_type, config_hash=config_hash)
-    output_root = Path(str(config["project"]["output_root"])).resolve()
-    run_dir = output_root / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
-    save_resolved_config(config, run_dir / "resolved_config.yaml")
-    (run_dir / "environment.json").write_text(
-        json.dumps(collect_environment_metadata(), indent=2, sort_keys=True), encoding="utf-8"
-    )
+    if resume_run_dir is None:
+        run_id = make_run_id(experiment_type=experiment_type, config_hash=config_hash)
+        output_root = Path(str(config["project"]["output_root"])).resolve()
+        run_dir = output_root / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        save_resolved_config(config, run_dir / "resolved_config.yaml")
+        (run_dir / "environment.json").write_text(
+            json.dumps(collect_environment_metadata(), indent=2, sort_keys=True), encoding="utf-8"
+        )
+    else:
+        run_dir = resume_run_dir.resolve()
+        run_id = run_dir.name
+        _prepare_resumed_run(run_dir, config)
     logger = configure_logging(run_id=run_id, log_path=run_dir / "run.log")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("prepared experiment on device=%s seed=%d", device, seed)
+    if resume_run_dir is not None:
+        logger.info("resuming interrupted run %s in place", run_id)
     return ExperimentContext(run_id, run_dir, dict(config), device, seed)
 
 

@@ -142,6 +142,46 @@ python main.py --config configs/ablation.yaml
 python -m scripts.build_report --output outputs/report
 ```
 
+### Resuming an interrupted run
+
+The baseline and unseen-generator protocols each train one long model, so losing the
+machine part-way through should not cost the epochs already paid for. Both write
+`last_checkpoint.pt` and a `training_state.json` sidecar at the end of every epoch, and
+both accept `--resume`:
+
+```powershell
+python main.py --config configs/tiny_genimage_baseline.yaml --resume outputs/<run_id>
+```
+
+The resumed run continues **in the original output directory** from the last completed
+epoch. It restores the model, optimiser, schedule, gradient scaler, epoch history, best
+score, early-stopping counters, and the random-number generator positions — including
+the training loader's shuffle generator — so the continuation reproduces the run that
+would have happened had it never been interrupted. `tests/test_resume_contracts.py`
+asserts exactly that, by comparing a resumed run's per-epoch history against an
+uninterrupted reference run of the same config.
+
+Resume refuses, rather than guesses, when:
+
+| condition | reason |
+|---|---|
+| the run's `status.json` says `completed` | a finished result must not be overwritten |
+| the config changed since the run started | epochs trained under one config would be attributed to another |
+| no epoch finished before the interruption | there is nothing to continue from; start again |
+| checkpoint and sidecar name different epochs | the crash landed between the two writes; the weights and the bookkeeping cannot be recombined |
+
+The sidecar is deleted when training reaches its end, so its presence *is* the marker
+that a run stopped part-way, and a completed run directory contains exactly the
+artefacts it did before this feature existed. Each resumed segment appends its
+environment metadata to `resume_events.json`, so a run continued on a different machine
+or library version says so.
+
+Two honest limitations: equivalence is verified for `training.num_workers: 0` (the
+configured value), because worker processes derive their own seeds outside this state;
+and GPU kernel nondeterminism is unaffected by generator restoration. `--resume` does
+not apply to `fine_tuning` or `ablation`, which are grids of many short fits rather than
+one long model, and the CLI rejects it there rather than ignoring it.
+
 Every run creates a unique output directory containing the resolved config, seed,
 environment information, split/manifest identity, sample-level predictions, aggregate
 metrics, logs, and checkpoint references with SHA-256 digests (`artefacts.json`). That
@@ -207,6 +247,7 @@ Notebooks are for interactive auditing and presentation. Reusable loading, filte
 - [x] Unit-test metrics against hand-calculated examples.
 - [x] Pass a tiny-batch overfitting test before full training.
 - [x] Implement checkpoint save/load and resolved-config logging.
+- [x] Support resuming an interrupted long run from its last completed epoch.
 - [x] Implement baseline, unseen-generator, fine-tuning, and ablation protocol runners.
 - [x] Implement the plotting and report-generation layer.
 - [ ] Run the four protocols in order on the real GenImage release.

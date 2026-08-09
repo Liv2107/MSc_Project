@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -45,3 +47,40 @@ class EarlyStopping:
         else:
             self.bad_epochs += 1
         return improved, self.bad_epochs >= self.patience
+
+    def state_dict(self) -> dict[str, Any]:
+        """Serialisable counters, so a resumed run does not forget its bad epochs.
+
+        The patience configuration is included so a resume can refuse a checkpoint whose
+        stopping rule no longer matches the config being run.
+        """
+
+        return {
+            "patience": self.patience,
+            "mode": self.mode,
+            "min_delta": self.min_delta,
+            "best_score": self.best_score,
+            "best_epoch": self.best_epoch,
+            "bad_epochs": self.bad_epochs,
+            "last_epoch": self._last_epoch,
+        }
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        if (
+            int(state["patience"]) != self.patience
+            or str(state["mode"]) != self.mode
+            or float(state["min_delta"]) != self.min_delta
+        ):
+            raise ValueError(
+                "early-stopping configuration changed since the interrupted run: "
+                f"saved patience={state['patience']} mode={state['mode']} "
+                f"min_delta={state['min_delta']}, configured patience={self.patience} "
+                f"mode={self.mode} min_delta={self.min_delta}"
+            )
+        saved_best = state.get("best_score")
+        self.best_score = None if saved_best is None else float(saved_best)
+        saved_epoch = state.get("best_epoch")
+        self.best_epoch = None if saved_epoch is None else int(saved_epoch)
+        self.bad_epochs = int(state["bad_epochs"])
+        last_epoch = state.get("last_epoch")
+        self._last_epoch = None if last_epoch is None else int(last_epoch)

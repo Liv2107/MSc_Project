@@ -6,8 +6,8 @@ generator holdouts, or test-set evaluation policy.
 
 IMPLEMENTATION CHECKLIST
 ------------------------
-[ ] Implement loss, optimiser, and scheduler factories.
-[ ] Overfit a tiny batch.
-[ ] Add validation, early stopping, mixed precision, and checkpoint resume.
+[x] Implement loss, optimiser, and scheduler factories.
+[x] Overfit a tiny batch.
+[x] Add validation, early stopping, mixed precision, and checkpoint resume.
 [ ] Verify no test loader enters the training API.
 """

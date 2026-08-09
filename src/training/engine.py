@@ -23,6 +23,14 @@ from src.models.checkpointing import (
     save_checkpoint,
 )
 from src.training.early_stopping import EarlyStopping
+from src.training.resume import (
+    TRAINING_STATE_FILENAME,
+    TrainingState,
+    capture_rng_state,
+    load_training_state,
+    restore_rng_state,
+    save_training_state,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -251,6 +259,67 @@ def validate_one_epoch(
     return EpochResult(total_loss / sample_count, _metrics(all_labels, all_scores), sample_count)
 
 
+def _restore_for_resume(
+    *,
+    state_path: Path,
+    last_path: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None,
+    scaler: Any | None,
+    early_stopping: EarlyStopping | None,
+    device: torch.device | str,
+    loader_generator: torch.Generator | None,
+) -> TrainingState:
+    """Put an interrupted run back exactly where it stopped, or refuse to continue.
+
+    Every failure here is raised rather than worked around. Silently restarting, or
+    continuing from a half-written state, would produce a run whose reported epoch
+    count does not describe the optimisation that actually happened -- which is worse
+    than losing the interrupted run.
+    """
+
+    if not state_path.is_file() or not last_path.is_file():
+        raise FileNotFoundError(
+            f"cannot resume: {last_path.name} and {state_path.name} must both exist in "
+            f"{last_path.parent}. A run that was interrupted before completing its first "
+            "epoch has nothing to resume from and must be started again."
+        )
+    state = load_training_state(state_path)
+    checkpoint = load_checkpoint(last_path, map_location=str(device))
+    checkpoint_epoch = int(checkpoint["metadata"]["epoch"])
+    if checkpoint_epoch != state.epoch:
+        raise RuntimeError(
+            f"cannot resume: {last_path.name} holds epoch {checkpoint_epoch} but "
+            f"{state_path.name} records epoch {state.epoch}. The run was interrupted "
+            "between the two writes, so the weights and the bookkeeping describe "
+            "different epochs and cannot be recombined."
+        )
+    model.load_state_dict(checkpoint["model_state"], strict=True)
+    optimizer.load_state_dict(checkpoint["optimizer_state"])
+    scheduler_state = checkpoint.get("scheduler_state")
+    if (scheduler is None) != (scheduler_state is None):
+        raise RuntimeError(
+            "cannot resume: the interrupted run's learning-rate schedule does not match "
+            "the configured one"
+        )
+    if scheduler is not None and scheduler_state is not None:
+        scheduler.load_state_dict(scheduler_state)
+    scaler_state = checkpoint.get("scaler_state")
+    if scaler is not None and scaler_state is not None:
+        scaler.load_state_dict(scaler_state)
+    if (early_stopping is None) != (state.early_stopping is None):
+        raise RuntimeError(
+            "cannot resume: early stopping was "
+            f"{'enabled' if state.early_stopping else 'disabled'} for the interrupted "
+            "run and is now the opposite"
+        )
+    if early_stopping is not None and state.early_stopping is not None:
+        early_stopping.load_state_dict(state.early_stopping)
+    restore_rng_state(state.rng, loader_generator=loader_generator)
+    return state
+
+
 def fit(
     *,
     model: nn.Module,
@@ -270,7 +339,18 @@ def fit(
     seed: int = 0,
     logger: logging.Logger | None = None,
     progress_label: str = "",
+    resume: bool = False,
 ) -> dict[str, Any]:
+    """Train for ``epochs`` epochs, selecting on validation only.
+
+    With ``resume=True`` the run continues from the last epoch recorded in
+    ``output_dir`` instead of starting at epoch 1: model, optimiser, scheduler, scaler,
+    history, best score, early-stopping counters, and generator positions are all
+    restored from ``last_checkpoint.pt`` plus the ``training_state.json`` sidecar. A
+    ``resume=False`` call behaves exactly as it always has, and any run that reaches the
+    end deletes the sidecar, so a completed run directory is unchanged by this feature.
+    """
+
     if type(epochs) is not int or epochs <= 0:
         raise ValueError("epochs must be positive")
     if checkpoint_metric not in {
@@ -286,9 +366,15 @@ def fit(
     output_dir.mkdir(parents=True, exist_ok=True)
     best_path = output_dir / "best_checkpoint.pt"
     last_path = output_dir / "last_checkpoint.pt"
+    state_path = output_dir / TRAINING_STATE_FILENAME
     history: list[dict[str, Any]] = []
     best_score: float | None = None
     best_epoch: int | None = None
+    start_epoch = 1
+    resumed_from_epochs: list[int] = []
+    # The generator the training loader shuffles with. It advances across epochs, so it
+    # is part of "where the run got to" and is snapshotted with the other generators.
+    loader_generator = getattr(train_loader, "generator", None)
     selection_mode = "min" if checkpoint_metric == "loss" else "max"
     model_name = str(getattr(getattr(model, "backbone", None), "model_name", type(model).__name__))
     fine_tune_mode = str(getattr(model, "trainability_summary", {}).get("mode", "unknown"))
@@ -297,6 +383,42 @@ def fit(
     epoch_durations: list[float] = []
     train_batches = _batch_total(train_loader)
     validation_batches = _batch_total(validation_loader)
+    if resume:
+        state = _restore_for_resume(
+            state_path=state_path,
+            last_path=last_path,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            early_stopping=early_stopping,
+            device=device,
+            loader_generator=loader_generator,
+        )
+        history = list(state.history)
+        best_score = state.best_score
+        best_epoch = state.best_epoch
+        epoch_durations = list(state.epoch_durations)
+        resumed_from_epochs = [*state.resumed_from_epochs, state.epoch]
+        start_epoch = state.epoch + 1
+        progress_logger.info(
+            "%s RESUMING from completed epoch %d: continuing at epoch %d of %d | "
+            "best epoch so far %s (val %s %s)",
+            label.strip() or "run",
+            state.epoch,
+            start_epoch,
+            epochs,
+            best_epoch,
+            checkpoint_metric,
+            "none" if best_score is None else f"{best_score:.4f}",
+        )
+        if start_epoch > epochs:
+            progress_logger.info(
+                "%s already reached the configured epoch budget; finalising without "
+                "further training",
+                label.strip() or "run",
+            )
+
     progress_logger.info(
         "%s training: up to %d epochs | %s train + %s val batches per epoch | "
         "%s | selecting on val %s",
@@ -308,7 +430,7 @@ def fit(
         checkpoint_metric,
     )
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         epoch_started = time.perf_counter()
         train_result = train_one_epoch(
             model=model,
@@ -390,6 +512,24 @@ def fit(
             if remaining_epochs
             else "  (final epoch)",
         )
+        # Written after the checkpoint, so the sidecar can never claim an epoch whose
+        # weights were not persisted. The reverse gap (checkpoint newer than sidecar) is
+        # detected and refused on resume rather than silently mixing two epochs.
+        save_training_state(
+            TrainingState(
+                epoch=epoch,
+                best_score=best_score,
+                best_epoch=best_epoch,
+                history=history,
+                epoch_durations=epoch_durations,
+                early_stopping=(
+                    None if early_stopping is None else early_stopping.state_dict()
+                ),
+                rng=capture_rng_state(loader_generator=loader_generator),
+                resumed_from_epochs=resumed_from_epochs,
+            ),
+            state_path,
+        )
         if should_stop:
             progress_logger.info(
                 "%s early stopping at epoch %d: no improvement for %d epochs",
@@ -420,6 +560,10 @@ def fit(
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(history)
+    # Training reached its end, so there is nothing left to resume. Removing the sidecar
+    # keeps a finished run directory identical to one produced before resume existed,
+    # and makes the file's presence an unambiguous "this run stopped part-way" marker.
+    state_path.unlink(missing_ok=True)
     return {
         "best_checkpoint": best_path,
         "last_checkpoint": last_path,
@@ -427,4 +571,5 @@ def fit(
         "history": history,
         "best_epoch": best_epoch,
         "best_score": best_score,
+        "resumed_from_epochs": resumed_from_epochs,
     }
