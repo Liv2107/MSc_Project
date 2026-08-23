@@ -19,6 +19,19 @@ class FineTuneMode(StrEnum):
     FULL = "full"
 
 
+class HeadType(StrEnum):
+    """Classifier architectures available on top of the frozen CLIP embedding.
+
+    ``LINEAR`` is the original detector and remains the default, so every existing run
+    and config keeps its exact behaviour. ``COSINE`` is the model-development arm; it is
+    deliberately parameter-matched to within one scalar so that any difference between
+    them cannot be attributed to capacity.
+    """
+
+    LINEAR = "linear"
+    COSINE = "cosine"
+
+
 @dataclass(frozen=True, slots=True)
 class DetectorOutput:
     logits: Tensor
@@ -107,10 +120,92 @@ class BinaryClassifierHead(nn.Module):
         return cast(Tensor, self.classifier(self.dropout(embeddings)).squeeze(-1))
 
 
-class CLIPBinaryDetector(nn.Module):
-    def __init__(self, backbone: CLIPVisionBackbone, classifier: BinaryClassifierHead) -> None:
+class CosineClassifierHead(nn.Module):
+    """L2-normalise the embedding, then score it with a normalised weight vector.
+
+    Research hypothesis this head exists to test
+    --------------------------------------------
+    CLIP was contrastively pretrained with cosine similarity over **L2-normalised**
+    embeddings. Classifying the raw ``pooler_output`` with an unnormalised linear layer
+    therefore lets the decision depend on embedding **magnitude**, and magnitude tracks
+    low-level image statistics -- native resolution, compression history, texture energy
+    -- which differ systematically between generators without being evidence that an
+    image was generated at all. A detector that leans on magnitude should transfer poorly
+    to a generator whose images were produced at a different scale.
+
+    Normalising both the embedding and the weight removes magnitude from the decision
+    entirely: the logit becomes ``scale * cos(embedding, weight) + bias``, so only the
+    *direction* of the embedding can matter.
+
+    Why it is a fair comparison
+    ---------------------------
+    The parameter count is 770 against the linear head's 769: the same 768 weights and
+    one bias, plus a single learnable scale. A difference in results therefore cannot be
+    attributed to extra capacity, which is exactly the confound that makes "I added a
+    bigger head and it improved" an uninterpretable result.
+
+    ``scale`` is learned in log space and initialised at 30.0, close to the converged
+    inverse-temperature of CLIP's own contrastive objective. Without a scale, cosine
+    logits are bounded in [-1, 1] and the sigmoid could never saturate, which would cap
+    the achievable loss and confound the architecture with an optimisation artefact.
+    """
+
+    def __init__(self, input_dim: int, dropout: float = 0.0, initial_scale: float = 30.0) -> None:
         super().__init__()
-        if backbone.feature_dim != classifier.input_dim:
+        if type(input_dim) is not int or input_dim <= 0:
+            raise ValueError("input_dim must be a positive integer")
+        if not 0 <= dropout < 1:
+            raise ValueError("dropout must be in [0, 1)")
+        if not initial_scale > 0:
+            raise ValueError("initial_scale must be positive")
+        self.input_dim = input_dim
+        self.dropout = nn.Dropout(dropout) if dropout else nn.Identity()
+        self.classifier = nn.Linear(input_dim, 1)
+        self.log_scale = nn.Parameter(torch.tensor(float(initial_scale)).log())
+
+    def forward(self, embeddings: Tensor) -> Tensor:
+        if embeddings.ndim != 2 or embeddings.shape[1] != self.input_dim:
+            raise ValueError(f"embeddings must have shape [B, {self.input_dim}]")
+        features = nn.functional.normalize(self.dropout(embeddings), dim=1)
+        weight = nn.functional.normalize(self.classifier.weight, dim=1)
+        cosine = nn.functional.linear(features, weight, self.classifier.bias)
+        return cast(Tensor, (self.log_scale.exp() * cosine).squeeze(-1))
+
+
+#: Head constructors, keyed by ``model.head_type``. Adding an entry is the only change
+#: needed to make a new classifier architecture configurable.
+HEAD_BUILDERS = {
+    HeadType.LINEAR: BinaryClassifierHead,
+    HeadType.COSINE: CosineClassifierHead,
+}
+
+
+def build_classifier_head(
+    input_dim: int, *, head_type: HeadType | str = HeadType.LINEAR, dropout: float = 0.0
+) -> nn.Module:
+    """Construct the configured classifier head. Defaults to the original linear head."""
+
+    try:
+        resolved = HeadType(str(head_type))
+    except ValueError as exc:
+        raise ValueError(
+            f"unknown model.head_type {head_type!r}; supported: "
+            f"{[member.value for member in HeadType]}"
+        ) from exc
+    return cast(nn.Module, HEAD_BUILDERS[resolved](input_dim, dropout=dropout))
+
+
+class CLIPBinaryDetector(nn.Module):
+    def __init__(self, backbone: CLIPVisionBackbone, classifier: nn.Module) -> None:
+        super().__init__()
+        # Any head exposing ``input_dim`` and mapping [B, input_dim] -> [B] qualifies, so
+        # a new architecture can be added without touching the detector. The dimension is
+        # checked here rather than trusted, because a silent mismatch would surface much
+        # later as a confusing shape error inside training.
+        head_dim = getattr(classifier, "input_dim", None)
+        if not isinstance(head_dim, int):
+            raise TypeError("classifier must expose an integer input_dim")
+        if backbone.feature_dim != head_dim:
             raise ValueError("classifier input dimension does not match backbone output")
         self.backbone = backbone
         self.classifier = classifier

@@ -1,0 +1,65 @@
+# MODEL-DEVELOPMENT ARM: cosine (L2-normalised) head, held-out vqdm.
+#
+# ============================ METHODOLOGICAL STATUS ============================
+# VQDM IS A DEVELOPMENT CONDITION, NOT A CLEAN ZERO-SHOT VALIDATION.
+#
+# The vqdm leave-one-generator-out result (ROC-AUC 0.9664 in-distribution against 0.6746
+# unseen) was measured BEFORE this architecture was designed, and it is what motivated
+# designing it. The model never sees vqdm -- there is no data leakage -- but the
+# EXPERIMENTER has, so the architecture was selected in the knowledge of this generator's
+# failure. Reporting an improvement here as evidence of zero-shot generalisation would be
+# post-hoc selection on the outcome.
+#
+# Accordingly:
+#   * this run is reported as a DEVELOPMENT result;
+#   * configs/tiny_unseen_wukong_cosine.yaml is PRE-DECLARED as the confirmatory test,
+#     on a generator that has never been held out in any run of this project.
+# ===============================================================================
+#
+# HYPOTHESIS UNDER TEST
+# CLIP was contrastively pretrained with cosine similarity over L2-normalised embeddings.
+# Classifying the raw pooled embedding with an unnormalised linear layer lets the decision
+# depend on embedding MAGNITUDE, which tracks low-level image statistics (native
+# resolution, compression history, texture energy) that differ between generators without
+# being evidence that an image was generated. Removing magnitude should transfer better.
+#
+# PREDICTION, DECLARED BEFORE RUNNING
+#   convincing    : degradation <= 0.15 ROC-AUC (roughly halved from 0.292), unseen
+#                   ROC-AUC >= 0.82, AND in-distribution within ~0.01 of 0.9664
+#   inconclusive  : unseen ROC-AUC improves by < 0.05, or in-distribution drops
+#   failure       : degradation >= 0.29, or in-distribution degrades
+# With ONE seed, a difference below ~0.05 ROC-AUC is not interpretable either way.
+#
+# SINGLE-FACTOR CONTROL
+# Identical in every respect to configs/tiny_unseen_vqdm.yaml except model.head_type.
+# Same generators, splits, manifest, seed, epochs, batch size, LEARNING RATE, threshold
+# policy, and the byte-identical vqdm test set (final_test_sha256 861b69f7...).
+#
+# The learning rate is deliberately NOT retuned for this head. Tuning it on vqdm would be
+# leakage; tuning it on seen-generator validation would add a second changed factor. The
+# inherited 1e-3 is therefore kept, which is conservative: it biases against the new head.
+
+base_config: tiny_genimage_base.yaml
+
+experiment:
+  type: unseen_generator
+  name: tiny_unseen_vqdm_cosine
+
+model:
+  # THE ONLY DIFFERENCE from configs/tiny_unseen_vqdm.yaml.
+  # 770 trainable parameters against the linear head's 769, so any measured difference
+  # cannot be attributed to capacity.
+  head_type: cosine
+
+generators:
+  train: [biggan, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  validation: [biggan, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  test: [vqdm]
+  unseen: vqdm
+  include_real_images: true
+
+unseen_protocol:
+  adaptation_fraction: 1.0
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  fixed_real_test_pool: true

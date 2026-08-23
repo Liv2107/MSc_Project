@@ -157,6 +157,51 @@ def compute_binary_metrics(
     )
 
 
+SWEEP_METRICS = {
+    "f1": f1_score,
+    "precision": precision,
+    "recall": recall,
+    "accuracy": accuracy,
+}
+
+
+def threshold_sweep(
+    y_true: ArrayLike,
+    y_score: ArrayLike,
+    *,
+    metric: str = "f1",
+    thresholds: ArrayLike | None = None,
+) -> tuple[FloatArray, FloatArray]:
+    """Evaluate one threshold-dependent metric across a grid of decision thresholds.
+
+    This is the threshold-free ranking versus fixed-operating-point distinction made
+    visible: a model whose scores saturate near 0 and 1 keeps the same metric over a wide
+    band of thresholds, while a model whose positives sit at intermediate scores is
+    sharply sensitive to where the threshold falls. Two models can therefore share a
+    ROC-AUC and differ substantially at a fixed 0.5 prior.
+
+    Derived from saved per-sample scores using the same functions the runners use; no new
+    decision is taken here. Returns ``(thresholds, values)``.
+    """
+
+    if metric not in SWEEP_METRICS:
+        raise ValueError(f"unsupported sweep metric {metric!r}; supported: {sorted(SWEEP_METRICS)}")
+    true, score = validate_binary_inputs(y_true, y_score)
+    grid = (
+        np.linspace(0.0, 1.0, 201, dtype=np.float64)
+        if thresholds is None
+        else _one_dimensional(thresholds, name="thresholds").astype(np.float64)
+    )
+    if not np.isfinite(grid).all() or ((grid < 0) | (grid > 1)).any():
+        raise ValueError("thresholds must be finite and within [0, 1]")
+    function = SWEEP_METRICS[metric]
+    values = np.asarray(
+        [function(true, threshold_scores(score, threshold=float(t))) for t in grid],
+        dtype=np.float64,
+    )
+    return grid, values
+
+
 def per_generator_metrics(
     y_true: ArrayLike,
     y_score: ArrayLike,

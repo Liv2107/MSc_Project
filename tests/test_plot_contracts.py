@@ -19,7 +19,9 @@ from src.evaluation.metrics import precision_recall_curve_data, roc_curve_data
 from src.evaluation.plots import (
     plot_confusion_matrix,
     plot_fine_tuning_recovery,
+    plot_generalisation_degradation,
     plot_generator_performance,
+    plot_parameter_efficiency,
     plot_precision_recall_curves,
     plot_roc_curves,
     plot_training_curves,
@@ -203,3 +205,118 @@ def test_recovery_plot_validates_rows() -> None:
         plot_fine_tuning_recovery([{"adaptation_percentage": 0.0, "f1": 0.5}], metric_name="f1")
     with pytest.raises(ValueError, match="no recovery row has a defined"):
         plot_fine_tuning_recovery([recovery_row("none", 0.0, None)], metric_name="f1")
+
+
+# ------------------------------------------------------- generalisation degradation
+
+
+def degradation_row(
+    metric: str,
+    in_distribution: float | None,
+    unseen: float | None,
+    *,
+    operating_point: str = "default",
+) -> dict[str, Any]:
+    return {
+        "held_out_generator": "biggan",
+        "operating_point": operating_point,
+        "metric": metric,
+        "in_distribution": in_distribution,
+        "unseen": unseen,
+        "absolute_drop": (
+            None
+            if in_distribution is None or unseen is None
+            else in_distribution - unseen
+        ),
+    }
+
+
+def test_degradation_plot_annotates_the_drop_and_keeps_the_full_axis() -> None:
+    rows = [degradation_row("roc_auc", 0.95, 0.90), degradation_row("f1", 0.90, 0.80)]
+    _, axes = plot_generalisation_degradation(rows, metrics=("roc_auc", "f1"))
+    assert axes.get_ylim() == (0.0, 1.0)
+    annotations = [text.get_text() for text in axes.texts]
+    assert "+0.050" in annotations
+    assert "+0.100" in annotations
+    assert [text.get_text() for text in axes.get_xticklabels()] == ["roc_auc", "f1"]
+
+
+def test_degradation_plot_only_draws_one_operating_point() -> None:
+    rows = [
+        degradation_row("f1", 0.90, 0.80, operating_point="default"),
+        degradation_row("f1", 0.85, 0.70, operating_point="validation_selected"),
+    ]
+    _, axes = plot_generalisation_degradation(rows, metrics=("f1",))
+    # Two bars, not four: mixing thresholds in one chart would not be a comparison.
+    assert len(axes.patches) == 2
+    with pytest.raises(ValueError, match="no degradation row at operating point"):
+        plot_generalisation_degradation(rows, metrics=("f1",), operating_point="adaptation")
+
+
+def test_degradation_plot_lists_one_sided_metrics_instead_of_drawing_them() -> None:
+    rows = [degradation_row("roc_auc", 0.95, 0.90), degradation_row("f1", None, 0.80)]
+    _, axes = plot_generalisation_degradation(rows, metrics=("roc_auc", "f1"))
+    # The undefined pair must not be drawn against an implied zero.
+    assert len(axes.patches) == 2
+    assert any("Undefined on one side" in text.get_text() for text in axes.texts)
+
+    with pytest.raises(ValueError, match="both an in-distribution and an unseen value"):
+        plot_generalisation_degradation([degradation_row("f1", None, 0.8)], metrics=("f1",))
+    with pytest.raises(ValueError, match="at least one degradation row"):
+        plot_generalisation_degradation([])
+
+
+# ------------------------------------------------------------- parameter efficiency
+
+
+def efficiency_row(
+    mode: str, parameters: int | None, percentage: float, metric: float | None
+) -> dict[str, Any]:
+    return {
+        "fine_tune_mode": mode,
+        "trainable_parameters": parameters,
+        "adaptation_percentage": percentage,
+        "roc_auc": metric,
+    }
+
+
+def test_parameter_efficiency_uses_a_log_axis_and_marks_the_starting_point() -> None:
+    rows = [
+        efficiency_row("head_only", 769, 0.05, 0.94),
+        efficiency_row("last_block", 7_088_641, 0.05, 0.97),
+        efficiency_row("full", 87_456_769, 0.05, 0.98),
+    ]
+    _, axes = plot_parameter_efficiency(rows, metric_name="roc_auc", zero_percent_reference=0.90)
+    # Depths differ by orders of magnitude; a linear axis would collapse them together.
+    assert axes.get_xscale() == "log"
+    assert axes.get_ylim() == (0.0, 1.0)
+    labels = [text.get_text() for text in axes.get_legend().get_texts()]
+    assert any("0% adaptation reference (0.900)" in label for label in labels)
+    assert {"head_only", "last_block", "full"} <= set(labels)
+
+
+def test_parameter_efficiency_says_when_no_depth_comparison_exists() -> None:
+    rows = [
+        efficiency_row("head_only", 769, 0.05, 0.94),
+        efficiency_row("head_only", 769, 0.50, 0.98),
+    ]
+    _, axes = plot_parameter_efficiency(rows, metric_name="roc_auc")
+    # A single depth is a legitimate state of the study, but the figure must not imply a
+    # trade-off was measured.
+    assert any("no depth comparison is shown" in text.get_text() for text in axes.texts)
+    # Budgets sharing an x position must still be labelled distinctly.
+    annotations = [text.get_text() for text in axes.texts]
+    assert "5%" in annotations and "50%" in annotations
+
+
+def test_parameter_efficiency_requires_both_a_metric_and_a_parameter_count() -> None:
+    with pytest.raises(ValueError, match="at least one cell row"):
+        plot_parameter_efficiency([], metric_name="roc_auc")
+    with pytest.raises(ValueError, match="trainable_parameters"):
+        plot_parameter_efficiency(
+            [efficiency_row("head_only", None, 0.05, 0.9)], metric_name="roc_auc"
+        )
+    with pytest.raises(ValueError, match="trainable_parameters"):
+        plot_parameter_efficiency(
+            [efficiency_row("head_only", 769, 0.05, None)], metric_name="roc_auc"
+        )

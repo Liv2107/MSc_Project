@@ -142,6 +142,9 @@ python main.py --config configs/ablation.yaml
 python -m scripts.build_report --output outputs/report
 ```
 
+Step 6 is safe to run at any point and is not a training step: it only reads saved run
+directories, so it can be re-run after every experiment.
+
 ### Resuming an interrupted run
 
 The baseline and unseen-generator protocols each train one long model, so losing the
@@ -221,6 +224,65 @@ python -m scripts.build_report --output outputs/report
 `scripts/build_report.py` prints a warning banner when a reported run came from one.
 Their only purpose is to prove the mechanism runs and the leakage assertions fire.
 
+## Aggregating results across runs
+
+`python -m scripts.build_report --output outputs/report` produces two halves.
+
+**Per-experiment sections** (`outputs/report/<protocol>/`) report one run of each protocol
+in depth: ROC and precision-recall curves, confusion matrices at every declared operating
+point, per-generator tables, and the composition/threshold provenance tables.
+
+**A consolidated section** (`outputs/report/consolidated/`) aggregates *every* completed
+run, which is what a results chapter needs and what a single-run report cannot give:
+
+| artefact | contents |
+|---|---|
+| `consolidated_results.csv` | The tidy table. One row per (run, evaluation set, condition, operating point), carrying accuracy/precision/recall/F1/ROC-AUC/PR-AUC, confusion counts, prevalence, trainable and total parameters, learning rate, epochs, selected epoch and checkpoint digest, labelled budget, and the manifest hash. |
+| `consolidated_results.json` | The same rows plus the experiment inventory, degradation rows, recovery summary, and the declared column schemas. |
+| `table_experiment_inventory.{csv,md}` | Every run found, **including failed and interrupted ones**, with status, seed, environment, and run directory. |
+| `table_chapter4_metrics.{csv,md}` | The headline metric comparison, ordered baseline → unseen → recovery → ablation. |
+| `table_unseen_degradation.{csv,md}` | In-distribution vs held-out generator, per metric, with absolute and relative drop. |
+| `table_recovery_budget.{csv,md}` | Per budget and depth: mean, standard deviation, standard error, min/max, absolute recovery, relative improvement, and fraction of the generalisation gap closed. |
+| `missing_results.md` | What a complete study would contain that these artefacts do not. |
+| `figure_degradation_*.{pdf,png}` | Unseen-generator degradation. |
+| `figure_recovery_all_runs_*.{pdf,png}` | Limited-data recovery, pooled across runs; becomes the depth comparison once the ablation exists. |
+| `figure_parameter_efficiency_*.{pdf,png}` | Performance against the parameters each depth actually trained, on a log axis. |
+
+The logic lives in `src/evaluation/aggregation.py`, not in the script, so notebooks 02 and
+03 consume the same functions rather than walking `outputs/` themselves. It is a **reader
+only**: it never loads a model and never recomputes a metric from raw predictions. The only
+arithmetic it performs is over numbers a run already saved, and each derived quantity is
+named so it cannot be mistaken for a measurement (`positive_prevalence`,
+`absolute_recovery`, `relative_improvement`, `gap_closed_fraction`).
+
+Three rules it enforces, each of which is a unit test in
+`tests/test_aggregation_contracts.py`:
+
+- **Nothing is imputed.** A quantity no run measured stays `None` and renders as
+  `undefined`. It never becomes zero and is never borrowed from another run.
+- **Provenance is per row.** Every row carries `run_id`, `source_file`, and the
+  `source_sha256` the run recorded in its own `artefacts.json`.
+- **Operating points are never mixed.** The saved in-distribution reference was measured
+  at the default threshold, so it is quoted as a ceiling only for threshold-free metrics
+  or at the default operating point. Comparing an F1 at an adaptation-selected threshold
+  against one at 0.5 would report a threshold change as a generalisation gap.
+
+`gap_closed_fraction` carries a `gap_closed_is_reliable` flag. When the measured
+in-distribution-minus-unseen gap is smaller than `MINIMUM_RELIABLE_GAP` (0.02), the
+denominator is dominated by sampling noise and a small absolute gain reads as a huge
+percentage; the fraction is still reported, but flagged, and `absolute_recovery` should be
+quoted instead.
+
+Synthetic `SMOKE_` runs are excluded from both halves by default, including from
+"newest run of this protocol" discovery, so a smoke run that finished most recently cannot
+be picked up as a result. `--include-synthetic-smoke` opts them back in and every table
+then carries an `is_synthetic_smoke` column.
+
+**Uncertainty.** Standard deviation is reported alongside `runs`. With a single fit,
+`standard_deviation` is `0.0` and `standard_error` is `undefined`, because the spread was
+*not measured* rather than measured to be zero — and `plot_fine_tuning_recovery` draws a
+band only where at least three runs exist.
+
 ## Reproducibility and common failure modes
 
 - Fit transforms, sampling rules, and thresholds without consulting the test set.
@@ -235,7 +297,22 @@ Their only purpose is to prove the mechanism runs and the leakage assertions fir
 
 ## What belongs in notebooks
 
-Notebooks are for interactive auditing and presentation. Reusable loading, filtering, metrics, and plotting logic belongs under `src/`; otherwise notebook execution order becomes an undocumented experimental dependency. The included notebooks contain markdown guidance and commented placeholder cells only, and generate no results.
+Notebooks are for interactive auditing and presentation. Reusable loading, filtering, metrics, and plotting logic belongs under `src/`; otherwise notebook execution order becomes an undocumented experimental dependency.
+
+Notebook 01 still contains markdown guidance and placeholder cells only. Notebooks 02 and
+03 are executed presentation layers: run discovery, smoke-run exclusion, consolidation, and
+the recovery/degradation arithmetic all come from `src.evaluation.aggregation`, and the
+figures come from `src.evaluation.plots`. Neither notebook defines analysis logic that a
+script could not reuse, and neither trains anything — re-run them with:
+
+```powershell
+python -m jupyter nbconvert --to notebook --execute --inplace notebooks/02_visualisations.ipynb
+python -m jupyter nbconvert --to notebook --execute --inplace notebooks/03_results_analysis.ipynb
+```
+
+Notebook 03 ends with a coverage cell that lists incomplete runs, protocols with no
+reportable run, generators not yet held out, fine-tuning depths not yet compared, and
+whether across-seed variability was measured at all.
 
 ## Repository implementation checklist
 
@@ -250,9 +327,13 @@ Notebooks are for interactive auditing and presentation. Reusable loading, filte
 - [x] Support resuming an interrupted long run from its last completed epoch.
 - [x] Implement baseline, unseen-generator, fine-tuning, and ablation protocol runners.
 - [x] Implement the plotting and report-generation layer.
+- [x] Aggregate every run into one traceable, machine-readable results artefact.
 - [ ] Run the four protocols in order on the real GenImage release.
+      Baseline, unseen-generator (biggan), and recovery (biggan, head-only) are done;
+      the fine-tuning-depth ablation has not completed.
+- [ ] Repeat leave-one-generator-out for the remaining six generators.
 - [ ] Repeat experiments across declared seeds.
-- [ ] Populate notebooks only from saved, auditable outputs.
+- [x] Populate notebooks only from saved, auditable outputs.
 - [ ] Freeze dependencies and document the final compute environment.
 
 ## Tiny GenImage and mandatory preprocessing

@@ -11,6 +11,20 @@ Curves are the one exception worth naming: ROC and precision-recall coordinates 
 derived here from the *saved per-sample scores*, using the same
 ``src.evaluation.metrics`` functions the runners use. No new decisions are taken.
 
+The report has two halves:
+
+* **Per-experiment sections** -- one run of each protocol, reported in depth (curves,
+  confusion matrices, composition and threshold tables).
+* **A consolidated section** -- *every* completed run aggregated into one tidy table,
+  plus the cross-run comparison figures and the Chapter 4 metric table. This half is
+  built by :mod:`src.evaluation.aggregation`, and it is what future notebooks should
+  read instead of walking ``outputs/`` themselves.
+
+Synthetic smoke runs (experiment names prefixed ``SMOKE_``) are excluded from both
+halves by default, because they are pipeline evidence on procedurally generated images
+rather than detector performance. ``--include-synthetic-smoke`` opts them back in and
+every generated table then carries an ``is_synthetic_smoke`` column.
+
 Usage
 -----
     python -m scripts.build_report --output outputs/report
@@ -25,11 +39,29 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.evaluation.aggregation import (
+    CONSOLIDATED_COLUMNS,
+    EXPERIMENT_METRIC_FILES,
+    RECOVERY_SUMMARY_COLUMNS,
+    RUN_SUMMARY_COLUMNS,
+    SUMMARY_METRICS,
+    RunRecord,
+    consolidate_runs,
+    degradation_rows,
+    describe_run,
+    reportable_runs,
+    summarise_recovery,
+    summarise_runs,
+    write_table,
+)
+from src.evaluation.aggregation import (
+    discover_runs as discover_all_runs,
+)
 from src.evaluation.metrics import (
     compute_binary_metrics,
     confusion_matrix,
@@ -40,18 +72,21 @@ from src.evaluation.metrics import (
 from src.evaluation.plots import (
     plot_confusion_matrix,
     plot_fine_tuning_recovery,
+    plot_generalisation_degradation,
     plot_generator_performance,
+    plot_parameter_efficiency,
     plot_precision_recall_curves,
     plot_roc_curves,
     plot_training_curves,
 )
 
-EXPERIMENT_METRIC_FILES = {
-    "baseline": "test_metrics.json",
-    "unseen_generator": "unseen_generator_metrics.json",
-    "fine_tuning": "recovery_metrics.json",
-    "ablation": "ablation_metrics.json",
-}
+#: Protocols a complete study is expected to contain, in the order they must be run.
+EXPECTED_PROTOCOLS: tuple[str, ...] = (
+    "baseline",
+    "unseen_generator",
+    "fine_tuning",
+    "ablation",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +107,24 @@ def _is_completed(run_dir: Path) -> bool:
         return False
 
 
-def discover_runs(output_root: Path, explicit: Sequence[Path] = ()) -> list[DiscoveredRun]:
-    """Find the runs to report on, preferring explicit paths over newest-completed."""
+def _is_synthetic_smoke(run_dir: Path) -> bool:
+    record = describe_run(run_dir)
+    return record is not None and record.is_synthetic_smoke
+
+
+def discover_runs(
+    output_root: Path,
+    explicit: Sequence[Path] = (),
+    *,
+    include_synthetic_smoke: bool = False,
+) -> list[DiscoveredRun]:
+    """Find the runs to report on, preferring explicit paths over newest-completed.
+
+    Synthetic smoke runs are skipped during automatic discovery unless opted into: a
+    smoke run that happened to finish most recently would otherwise be picked up as the
+    newest run of its protocol and reported as a result. An explicitly named ``--run``
+    is always honoured, because naming it is the opt-in.
+    """
 
     discovered: list[DiscoveredRun] = []
     if explicit:
@@ -96,7 +147,10 @@ def discover_runs(output_root: Path, explicit: Sequence[Path] = ()) -> list[Disc
         candidates = [
             path
             for path in sorted(output_root.glob(f"{experiment_type}-*"))
-            if path.is_dir() and (path / filename).is_file() and _is_completed(path)
+            if path.is_dir()
+            and (path / filename).is_file()
+            and _is_completed(path)
+            and (include_synthetic_smoke or not _is_synthetic_smoke(path))
         ]
         if candidates:
             newest = candidates[-1]
@@ -675,8 +729,372 @@ REPORTERS = {
 }
 
 
-def build_report(*, output_root: Path, destination: Path, explicit: Sequence[Path] = ()) -> Path:
-    runs = discover_runs(output_root, explicit)
+# --------------------------------------------------------------- consolidated section
+
+
+#: Column order of the Chapter 4 headline table.
+CHAPTER4_COLUMNS: Sequence[str] = (
+    "experiment",
+    "condition",
+    "evaluation_set",
+    "operating_point",
+    "threshold",
+    "support",
+    "prevalence",
+    *SUMMARY_METRICS,
+    "trainable_parameters",
+    "labelled_images_consumed",
+    "run_id",
+)
+
+
+def _condition_label(row: Mapping[str, Any]) -> str:
+    """A human-readable name for one evaluated condition, built from saved fields."""
+
+    percentage = row.get("adaptation_percentage")
+    mode = row.get("fine_tune_mode")
+    if row["experiment_type"] == "baseline":
+        return "in-distribution baseline"
+    if row["experiment_type"] == "unseen_generator":
+        if row.get("evaluation_set") == "in_distribution_test":
+            return "in-distribution reference (prevalence matched)"
+        return f"unseen {row.get('held_out_generator')} @ 0% adaptation"
+    return (
+        f"unseen {row.get('held_out_generator')} @ "
+        f"{float(percentage or 0.0) * 100:g}% adaptation, {mode}"
+    )
+
+
+#: Reading order of the Chapter 4 table: the protocols as the study runs them, then
+#: increasing adaptation budget, then operating point. Run start time -- the order the
+#: consolidated table happens to be in -- would put the baseline last.
+_PROTOCOL_ORDER = {name: index for index, name in enumerate(EXPECTED_PROTOCOLS)}
+_OPERATING_POINT_ORDER = {
+    "default": 0,
+    "validation_selected": 1,
+    "adaptation_selected": 2,
+    "baseline_unchanged": 3,
+}
+
+
+def _chapter4_sort_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        _PROTOCOL_ORDER.get(str(row.get("experiment_type")), len(_PROTOCOL_ORDER)),
+        str(row.get("held_out_generator") or ""),
+        float(row.get("adaptation_percentage") or 0.0),
+        str(row.get("fine_tune_mode") or ""),
+        str(row.get("evaluation_set") or ""),
+        _OPERATING_POINT_ORDER.get(str(row.get("operating_point")), 9),
+    )
+
+
+def _chapter4_rows(consolidated: Sequence[Mapping[str, Any]]) -> list[list[Any]]:
+    """Headline rows only: aggregate conditions, never the per-generator breakdowns."""
+
+    rows: list[list[Any]] = []
+    for row in sorted(consolidated, key=_chapter4_sort_key):
+        if row.get("generator") is not None:
+            continue
+        rows.append(
+            [
+                row.get("experiment_type"),
+                _condition_label(row),
+                row.get("evaluation_set"),
+                row.get("operating_point"),
+                row.get("threshold"),
+                row.get("support"),
+                row.get("positive_prevalence"),
+                *[row.get(metric) for metric in SUMMARY_METRICS],
+                row.get("trainable_parameters"),
+                row.get("labelled_images_consumed"),
+                row.get("run_id"),
+            ]
+        )
+    return rows
+
+
+def _missing_results(
+    records: Sequence[RunRecord], consolidated: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    """State what a complete study would contain that these artefacts do not.
+
+    Every statement is derived from what was found, never from a hard-coded expectation
+    about what the numbers *should* be. This is the section that stops a gap being read
+    as a result.
+    """
+
+    notes: list[str] = []
+    reportable = reportable_runs(records)
+    by_type = {record.experiment_type for record in reportable}
+    for protocol in EXPECTED_PROTOCOLS:
+        if protocol in by_type:
+            continue
+        partial = [
+            record
+            for record in records
+            if record.experiment_type == protocol and record.status != "completed"
+        ]
+        detail = (
+            f" (found {len(partial)} non-completed run(s): "
+            + ", ".join(f"{record.run_id} [{record.status}]" for record in partial)
+            + ")"
+            if partial
+            else ""
+        )
+        notes.append(f"- **No completed `{protocol}` run.**{detail}")
+
+    # Which generators exist at all, taken from the baseline's own per-generator block.
+    available = sorted(
+        {
+            str(row["generator"])
+            for row in consolidated
+            if row.get("experiment_type") == "baseline"
+            and row.get("generator")
+            and str(row["generator"]) != "real"
+        }
+    )
+    held_out = sorted(
+        {
+            str(record.held_out_generator)
+            for record in reportable
+            if record.experiment_type == "unseen_generator" and record.held_out_generator
+        }
+    )
+    if available:
+        # The baseline trains on every generator, so `available` already contains the
+        # ones that have since been held out; union rather than sum.
+        every_generator = sorted(set(available) | set(held_out))
+        remaining = [name for name in every_generator if name not in held_out]
+        notes.append(
+            f"- **Leave-one-generator-out covers {len(held_out)} of {len(every_generator)} "
+            f"generators** ({', '.join(held_out) or 'none'}). Not yet held out: "
+            f"{', '.join(remaining) or 'none'}."
+        )
+
+    modes = sorted(
+        {
+            str(row["fine_tune_mode"])
+            for row in consolidated
+            if row.get("experiment_type") in {"fine_tuning", "ablation"}
+            and row.get("fine_tune_mode")
+            and str(row["fine_tune_mode"]) != "none"
+        }
+    )
+    if modes:
+        absent = [name for name in ("head_only", "last_block", "full") if name not in modes]
+        notes.append(
+            f"- **Fine-tuning depths measured: {', '.join(modes)}.** "
+            f"Missing from the depth comparison: {', '.join(absent) or 'none'}."
+        )
+
+    replication = {
+        (
+            row.get("run_id"),
+            row.get("fine_tune_mode"),
+            row.get("adaptation_percentage"),
+        )
+        for row in consolidated
+        if row.get("experiment_type") in {"fine_tuning", "ablation"}
+        and row.get("generator") is None
+    }
+    seeds = {
+        (row.get("subset_seed"), row.get("training_seed"))
+        for row in consolidated
+        if row.get("experiment_type") in {"fine_tuning", "ablation"}
+        and row.get("subset_seed") is not None
+    }
+    if replication and len(seeds) <= 1:
+        notes.append(
+            "- **No repeated seeds.** Every adaptation cell was fitted once "
+            f"({len(seeds)} distinct (subset_seed, training_seed) pair). Standard "
+            "deviations are therefore reported as 0.0 with `runs = 1`, which means "
+            "*unmeasured*, not *zero variance*; no error bars are drawn."
+        )
+    return notes
+
+
+def report_consolidated(
+    records: Sequence[RunRecord], output_dir: Path, *, include_synthetic_smoke: bool = False
+) -> dict[str, Any]:
+    """Aggregate every completed run into the cross-run tables and figures."""
+
+    artefacts: list[str] = []
+    reportable = reportable_runs(records, include_synthetic_smoke=include_synthetic_smoke)
+    consolidated = consolidate_runs(reportable)
+    if not consolidated:
+        raise ValueError("no completed run produced a metrics file to consolidate")
+
+    # 1. The machine-readable artefact future notebooks consume.
+    write_table(consolidated, CONSOLIDATED_COLUMNS, output_dir / "consolidated_results.csv")
+    artefacts.append("consolidated_results.csv")
+
+    run_summary = summarise_runs(records, consolidated)
+    degradation = degradation_rows(consolidated)
+    recovery = summarise_recovery(consolidated, records=reportable)
+
+    (output_dir / "consolidated_results.json").write_text(
+        json.dumps(
+            {
+                "schema": {
+                    "consolidated_results": list(CONSOLIDATED_COLUMNS),
+                    "experiment_inventory": list(RUN_SUMMARY_COLUMNS),
+                    "recovery_summary": list(RECOVERY_SUMMARY_COLUMNS),
+                },
+                "includes_synthetic_smoke_runs": include_synthetic_smoke,
+                "runs_discovered": len(records),
+                "runs_consolidated": len(reportable),
+                "experiment_inventory": run_summary,
+                "consolidated_results": consolidated,
+                "unseen_generator_degradation": degradation,
+                "recovery_summary": recovery,
+            },
+            indent=2,
+            sort_keys=True,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    artefacts.append("consolidated_results.json")
+
+    # 2. Inventory of every run found, completed or not.
+    _emit_table(
+        [[row.get(column) for column in RUN_SUMMARY_COLUMNS] for row in run_summary],
+        list(RUN_SUMMARY_COLUMNS),
+        output_dir / "table_experiment_inventory",
+        artefacts,
+    )
+
+    # 3. The Chapter 4 metric comparison table.
+    _emit_table(
+        _chapter4_rows(consolidated),
+        list(CHAPTER4_COLUMNS),
+        output_dir / "table_chapter4_metrics",
+        artefacts,
+    )
+
+    # 4. Degradation and recovery.
+    if degradation:
+        _emit_table(
+            [
+                [
+                    row["held_out_generator"],
+                    row["operating_point"],
+                    row["metric"],
+                    row["in_distribution"],
+                    row["unseen"],
+                    row["absolute_drop"],
+                    row["relative_drop"],
+                    row["unseen_support"],
+                    row["unseen_prevalence"],
+                    row["run_id"],
+                ]
+                for row in degradation
+            ],
+            [
+                "held_out_generator",
+                "operating_point",
+                "metric",
+                "in_distribution",
+                "unseen",
+                "absolute_drop",
+                "relative_drop",
+                "unseen_support",
+                "unseen_prevalence",
+                "run_id",
+            ],
+            output_dir / "table_unseen_degradation",
+            artefacts,
+        )
+        for operating_point in sorted({str(row["operating_point"]) for row in degradation}):
+            try:
+                figure, _ = plot_generalisation_degradation(
+                    degradation, operating_point=operating_point
+                )
+            except ValueError:
+                continue
+            artefacts.extend(
+                _save_figure(figure, output_dir / f"figure_degradation_{operating_point}")
+            )
+
+    if recovery:
+        _emit_table(
+            [[row.get(column) for column in RECOVERY_SUMMARY_COLUMNS] for row in recovery],
+            list(RECOVERY_SUMMARY_COLUMNS),
+            output_dir / "table_recovery_budget",
+            artefacts,
+        )
+
+    # 5. Cross-run recovery and parameter-efficiency figures. These pool every completed
+    #    recovery and ablation run, so a depth comparison appears as soon as the ablation
+    #    exists without this script changing.
+    cell_rows = [
+        row
+        for row in consolidated
+        if row.get("experiment_type") in {"fine_tuning", "ablation"}
+        and row.get("generator") is None
+        and row.get("operating_point") == "default"
+    ]
+    for metric in ("roc_auc", "average_precision", "f1", "accuracy"):
+        if not any(row.get(metric) is not None for row in cell_rows):
+            continue
+        try:
+            figure, axes = plot_fine_tuning_recovery(cell_rows, metric_name=metric)
+        except ValueError:
+            continue
+        axes.set_title(f"Limited-data recovery, all completed runs ({metric})")
+        artefacts.extend(_save_figure(figure, output_dir / f"figure_recovery_all_runs_{metric}"))
+
+    adapted = [row for row in cell_rows if float(row.get("adaptation_percentage") or 0.0) > 0.0]
+    zero_by_metric = {
+        metric: next(
+            (
+                float(row[metric])
+                for row in cell_rows
+                if float(row.get("adaptation_percentage") or 0.0) == 0.0
+                and row.get(metric) is not None
+            ),
+            None,
+        )
+        for metric in ("roc_auc", "f1")
+    }
+    for metric in ("roc_auc", "f1"):
+        try:
+            figure, _ = plot_parameter_efficiency(
+                adapted, metric_name=metric, zero_percent_reference=zero_by_metric[metric]
+            )
+        except ValueError:
+            continue
+        artefacts.extend(_save_figure(figure, output_dir / f"figure_parameter_efficiency_{metric}"))
+
+    # 6. What is absent. Written every time, so a reader never has to infer it.
+    notes = _missing_results(records, consolidated)
+    (output_dir / "missing_results.md").write_text(
+        "# Expected results that these artefacts do not contain\n\n"
+        "Derived from the runs actually found under the output root. An entry here means "
+        "the experiment has not been run or has not completed; no value anywhere in this "
+        "report has been substituted for it.\n\n"
+        + ("\n".join(notes) if notes else "- Nothing missing was detected.")
+        + "\n",
+        encoding="utf-8",
+    )
+    artefacts.append("missing_results.md")
+
+    return {
+        "runs_discovered": len(records),
+        "runs_consolidated": [record.run_id for record in reportable],
+        "rows": len(consolidated),
+        "artefacts": artefacts,
+    }
+
+
+def build_report(
+    *,
+    output_root: Path,
+    destination: Path,
+    explicit: Sequence[Path] = (),
+    include_synthetic_smoke: bool = False,
+) -> Path:
+    runs = discover_runs(output_root, explicit, include_synthetic_smoke=include_synthetic_smoke)
     if not runs:
         raise ValueError(
             f"no completed runs with recognised metrics files were found under {output_root}"
@@ -693,6 +1111,19 @@ def build_report(*, output_root: Path, destination: Path, explicit: Sequence[Pat
         resolved_config = run.run_dir / "resolved_config.yaml"
         if resolved_config.is_file() and "SMOKE" in resolved_config.read_text(encoding="utf-8"):
             synthetic_warning = True
+
+    # The consolidated half sees every run under the output root, not just the newest of
+    # each protocol, so it is built from its own discovery rather than from `runs`.
+    records = discover_all_runs(output_root)
+    consolidated_dir = destination / "consolidated"
+    consolidated_dir.mkdir(parents=True, exist_ok=True)
+    manifest["sections"]["consolidated"] = report_consolidated(
+        records, consolidated_dir, include_synthetic_smoke=include_synthetic_smoke
+    )
+    manifest["runs_discovered"] = [
+        {"run_id": record.run_id, "status": record.status, "smoke": record.is_synthetic_smoke}
+        for record in records
+    ]
     manifest["contains_synthetic_smoke_runs"] = synthetic_warning
     (destination / "report_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
@@ -708,7 +1139,16 @@ def build_report(*, output_root: Path, destination: Path, explicit: Sequence[Pat
     lines += ["Every table and figure below is derived from these run directories:", ""]
     for experiment_type, run_dir in sorted(manifest["source_runs"].items()):
         lines.append(f"- `{experiment_type}`: `{run_dir}`")
-    lines.append("")
+    lines += [
+        "",
+        "`consolidated/` aggregates **every** completed run, not just the newest of each "
+        "protocol. Start from `consolidated/consolidated_results.csv`; every row names the "
+        "run and the metrics file it came from, with that file's SHA-256.",
+        "",
+        "See `consolidated/missing_results.md` for what a complete study would contain that "
+        "these artefacts do not.",
+        "",
+    ]
     for experiment_type, result in sorted(manifest["sections"].items()):
         lines.append(f"## {experiment_type}")
         lines.append("")
@@ -730,13 +1170,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Explicit run directory to report on; repeatable. Overrides discovery.",
     )
+    parser.add_argument(
+        "--include-synthetic-smoke",
+        action="store_true",
+        help=(
+            "Include SMOKE_ runs on synthetic fixture data. They verify the pipeline and "
+            "are not detector performance; excluded by default."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     destination = build_report(
-        output_root=args.output_root, destination=args.output, explicit=args.run
+        output_root=args.output_root,
+        destination=args.output,
+        explicit=args.run,
+        include_synthetic_smoke=args.include_synthetic_smoke,
     )
     print(f"Report written to {destination}")
 

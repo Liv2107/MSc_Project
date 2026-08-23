@@ -1,0 +1,51 @@
+# Limited-data recovery on Tiny GenImage for held-out vqdm.
+# 1 subset seed x 1 training seed x 4 budgets = 4 adaptation cells, plus the 0% reference
+# recomputed in-run = 5 reported points. Head-only adaptation only.
+#
+# WHY THIS EXPERIMENT. The completed vqdm leave-one-generator-out run measured a genuine
+# generalisation failure: ROC-AUC 0.9664 in-distribution against 0.6746 on held-out vqdm,
+# with recall collapsing to 0.304 at the fixed 0.5 threshold. Unlike the biggan condition
+# (ROC-AUC drop 0.009), there is something substantial to recover here, which is what
+# makes the recovery curve worth measuring.
+#
+# Every setting below is inherited unchanged from configs/tiny_recovery_biggan.yaml
+# except the held-out generator, the generator lists, and the starting checkpoint. The
+# budgets, subset seed, training seed, validation fraction, epoch budget, learning rate,
+# and freeze policy are deliberately identical, so the two recovery curves are comparable
+# and any difference between them is attributable to the generator rather than to the
+# adaptation procedure.
+
+base_config: tiny_genimage_base.yaml
+
+experiment:
+  type: fine_tuning
+  name: tiny_recovery_vqdm
+
+generators:
+  train: [biggan, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  validation: [biggan, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  test: [vqdm]
+  unseen: vqdm
+  include_real_images: true
+
+fine_tuning:
+  percentages: [0.05, 0.10, 0.20, 0.50]
+  # Same subset seed as the biggan recovery run, so the two curves differ only by
+  # generator. ONE seed: across-seed variability is not measured by this experiment.
+  subset_seeds: [42]
+  nested_subsets: true
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  # From the completed tiny_unseen_vqdm run (status: completed, best epoch 5, unseen
+  # ROC-AUC 0.6746 on the balanced 500-sample vqdm test set).
+  # sha256 3555e68a3396da4b98713bd29b52a56d5411afd96c8386c805ca36d9fc7edd30
+  #
+  # This MUST be the vqdm checkpoint. assert_starting_checkpoint_compatible refuses a
+  # checkpoint whose stored generators.unseen differs from this run's, so pointing at the
+  # biggan checkpoint would abort the run rather than silently produce a wrong result.
+  starting_checkpoint: outputs/unseen_generator-20260816T191041040059Z-4c30e188fc-e073/best_checkpoint.pt
+  reload_starting_checkpoint_each_run: true
+  fine_tune_mode: head_only
+  # A fifth of the adaptation pool is reserved for model selection, and each budget takes
+  # its nested share of that too, so the reported budget covers the selection cost.
+  adaptation_validation_fraction: 0.2

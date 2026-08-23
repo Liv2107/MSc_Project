@@ -23,9 +23,9 @@ from src.experiments.common import (
 )
 from src.models.checkpointing import load_checkpoint
 from src.models.clip_detector import (
-    BinaryClassifierHead,
     CLIPBinaryDetector,
     CLIPVisionBackbone,
+    build_classifier_head,
     configure_trainable_layers,
 )
 from src.training.components import (
@@ -163,8 +163,10 @@ def run_baseline(config_path: Path, *, resume_from: Path | None = None) -> Path:
             revision=config["model"].get("clip_revision"),
             feature_source=str(config["model"].get("feature_source", "pooled_output")),
         )
-        classifier = BinaryClassifierHead(
-            backbone.feature_dim, dropout=float(config["model"].get("classifier_dropout", 0.0))
+        classifier = build_classifier_head(
+            backbone.feature_dim,
+            head_type=str(config["model"].get("head_type", "linear")),
+            dropout=float(config["model"].get("classifier_dropout", 0.0)),
         )
         model = CLIPBinaryDetector(backbone, classifier).to(context.device)
         configure_trainable_layers(model, str(config["training"]["fine_tune_mode"]))

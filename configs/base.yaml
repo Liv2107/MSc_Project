@@ -26,6 +26,12 @@ model:
   # Immutable Hub commit resolved on 2026-08-04.
   clip_revision: 3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268
   feature_source: pooled_output
+  # Classifier architecture on top of the frozen CLIP embedding.
+  #   linear  Linear(768,1) on the raw pooled embedding. The original detector.
+  #   cosine  L2-normalise embedding and weight, then scale. 770 parameters vs 769,
+  #           so the two are parameter-matched and differ in exactly one factor:
+  #           whether embedding MAGNITUDE can influence the decision.
+  head_type: linear
   classifier_dropout: 0.0
   image_size: 224
   initial_checkpoint: null

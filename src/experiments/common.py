@@ -24,9 +24,9 @@ from src.datasets.splitting import load_split_assignments
 from src.evaluation.evaluator import PredictionRecord, collect_predictions
 from src.evaluation.metrics import BinaryMetrics, compute_binary_metrics, per_generator_metrics
 from src.models.clip_detector import (
-    BinaryClassifierHead,
     CLIPBinaryDetector,
     CLIPVisionBackbone,
+    build_classifier_head,
     configure_trainable_layers,
 )
 from src.training.components import (
@@ -333,8 +333,10 @@ def build_detector(
         revision=config["model"].get("clip_revision"),
         feature_source=str(config["model"].get("feature_source", "pooled_output")),
     )
-    classifier = BinaryClassifierHead(
-        backbone.feature_dim, dropout=float(config["model"].get("classifier_dropout", 0.0))
+    classifier = build_classifier_head(
+        backbone.feature_dim,
+        head_type=str(config["model"].get("head_type", "linear")),
+        dropout=float(config["model"].get("classifier_dropout", 0.0)),
     )
     model = CLIPBinaryDetector(backbone, classifier).to(device)
     mode = (

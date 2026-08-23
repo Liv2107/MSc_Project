@@ -1,0 +1,64 @@
+# CONFIRMATORY ARM: cosine (L2-normalised) head, held-out wukong.
+#
+# ======================= PRE-DECLARED CONFIRMATORY TEST =======================
+# THIS IS THE CONDITION THE ZERO-SHOT CLAIM RESTS ON.
+#
+# wukong has NEVER been held out in any run of this project. Its leave-one-generator-out
+# behaviour is unmeasured for BOTH the linear and the cosine head at the time this file
+# was written. Neither the architecture nor any hyperparameter was chosen with knowledge
+# of how either detector performs on wukong.
+#
+# This file is committed BEFORE the run, together with the prediction below, so that the
+# comparison cannot be reframed after the numbers are seen. That is what makes wukong,
+# and not vqdm, the honest test of:
+#
+#   "a detector that degrades less severely on a generator it has never encountered"
+#
+# vqdm (configs/tiny_unseen_vqdm_cosine.yaml) is the DEVELOPMENT condition: it motivated
+# the architecture, so an improvement there is suggestive but selected-upon.
+# ==============================================================================
+#
+# REQUIRED CONTROL RUN
+# This arm is only interpretable against the linear head on the SAME generator. Run
+# configs/tiny_unseen_wukong.yaml as well; the pair is the comparison. Running only this
+# one measures nothing, because there is no wukong baseline to compare against.
+#
+# PREDICTION, DECLARED BEFORE EITHER WUKONG RUN
+# If the magnitude hypothesis is right, the cosine head should show a SMALLER
+# in-distribution-to-unseen ROC-AUC drop than the linear head on wukong, while matching
+# it in-distribution to within ~0.01. If the linear head does not degrade appreciably on
+# wukong, the condition is uninformative rather than a success for either arm, and that
+# must be reported as such.
+#
+# DOCUMENTED CONFOUND
+# wukong is a Chinese Stable Diffusion variant and stable_diffusion_v1_5 REMAINS IN
+# TRAINING here, so a detector trained without wukong still sees a close architectural
+# sibling. Any measured degradation is therefore a LOWER BOUND on what a genuinely novel
+# architecture would cause. This is stated in advance, not discovered afterwards.
+#
+# SINGLE-FACTOR CONTROL
+# Identical to configs/tiny_unseen_wukong.yaml except model.head_type. Learning rate is
+# not retuned, for the same reason as the vqdm arm.
+
+base_config: tiny_genimage_base.yaml
+
+experiment:
+  type: unseen_generator
+  name: tiny_unseen_wukong_cosine
+
+model:
+  # The only difference from configs/tiny_unseen_wukong.yaml.
+  head_type: cosine
+
+generators:
+  train: [vqdm, stable_diffusion_v1_5, biggan, adm, glide, midjourney]
+  validation: [vqdm, stable_diffusion_v1_5, biggan, adm, glide, midjourney]
+  test: [wukong]
+  unseen: wukong
+  include_real_images: true
+
+unseen_protocol:
+  adaptation_fraction: 1.0
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  fixed_real_test_pool: true

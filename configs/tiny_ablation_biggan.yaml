@@ -1,0 +1,73 @@
+# Fine-tuning-depth ablation on Tiny GenImage for held-out biggan.
+#
+# Research question: when adapting to a previously unseen generator with limited
+# labelled data, how much of the model needs to be fine-tuned?
+#
+# First pass: 3 modes x 4 budgets x 1 subset seed x 1 training seed = 12 adaptation
+# cells, plus the 0% reference recomputed in-run.
+#
+# Everything except the trainable depth is inherited from the completed head-only
+# recovery run: the same starting checkpoint, the same nested adaptation subsets, the
+# same untouched 500-image balanced biggan test set, and the same threshold policy.
+
+base_config: tiny_genimage_base.yaml
+
+experiment:
+  type: ablation
+  name: tiny_ablation_biggan
+
+generators:
+  train: [vqdm, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  validation: [vqdm, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  test: [biggan]
+  unseen: biggan
+  include_real_images: true
+
+fine_tuning:
+  percentages: [0.05, 0.10, 0.20, 0.50]
+  subset_seeds: [42]
+  nested_subsets: true
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  # The same checkpoint configs/tiny_recovery_biggan.yaml adapted from, so the depth
+  # comparison and the existing head-only recovery curve share one 0% origin.
+  starting_checkpoint: outputs/unseen_generator-20260808T151948963300Z-c74c3e0db3-363b/best_checkpoint.pt
+  reload_starting_checkpoint_each_run: true
+  fine_tune_mode: head_only
+  adaptation_validation_fraction: 0.2
+
+ablation:
+  modes: [head_only, last_block, full]
+  control_starting_checkpoint: true
+  control_subset_ids: true
+  control_final_test_ids: true
+  training_budget_policy: equal_epochs
+  record_trainable_parameter_names: true
+  record_training_time: true
+
+# PREDECLARED PER-MODE LEARNING RATE.
+#
+# The inherited rate of 0.001 was chosen for a 769-parameter linear head. Applied to the
+# pretrained CLIP weights it is roughly two orders of magnitude too large. A probe on the
+# 5% budget, from this same checkpoint and these same subsets, over three epochs:
+#
+#   last_block  lr=0.001   val f1 0.59 -> 0.87 -> 0.86   (unstable but recovers)
+#   last_block  lr=1e-05   val f1 0.81 -> 0.69 -> 0.81
+#   full        lr=0.001   val f1 0.00 -> 0.00 -> 0.00   (collapsed, did not recover)
+#   full        lr=1e-05   val f1 0.95 -> 0.97 -> 1.00
+#
+# Holding 0.001 across all three depths would have made the ablation measure the learning
+# rate rather than the adaptation depth: full fine-tuning collapses at every budget, which
+# says nothing about whether broad adaptation helps. The rates below are therefore
+# declared in advance, before any ablation cell was fitted, and are recorded in
+# ablation_metrics.json under controls.mode_overrides_applied.
+#
+# The cost is that learning rate is no longer constant across modes, and Chapter 4 must
+# state that. head_only keeps 0.001, so its cells reproduce the completed head-only
+# recovery run and provide a reproducibility check on the shared data path.
+mode_overrides:
+  head_only: null
+  last_block:
+    learning_rate: 0.00001
+  full:
+    learning_rate: 0.00001

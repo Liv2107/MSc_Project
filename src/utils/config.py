@@ -133,6 +133,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
             "clip_model_name",
             "clip_revision",
             "feature_source",
+            "head_type",
             "classifier_dropout",
             "image_size",
             "initial_checkpoint",
@@ -232,6 +233,10 @@ def validate_config(config: Mapping[str, Any]) -> None:
     dropout = model.get("classifier_dropout")
     if not isinstance(dropout, (int, float)) or not 0 <= dropout < 1:
         errors.append("model.classifier_dropout must be in [0, 1)")
+    # Absent means the original linear head, so every pre-existing config keeps its
+    # exact behaviour without being edited.
+    if model.get("head_type", "linear") not in {"linear", "cosine"}:
+        errors.append("model.head_type must be linear or cosine")
     if training.get("optimizer") not in {"adamw", "sgd"}:
         errors.append("training.optimizer must be adamw or sgd")
     if training.get("scheduler") not in {"cosine_with_warmup", "none"}:
