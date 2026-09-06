@@ -64,8 +64,10 @@ class AIDetectionDataset(Dataset[dict[str, object]]):
     def __getitem__(self, index: int) -> dict[str, object]:
         record = self.records[index]
         try:
-            with Image.open(record.image_path) as image:
-                image = ImageOps.exif_transpose(image).convert("RGB")
+            with Image.open(record.image_path) as handle:
+                # exif_transpose returns a new Image, not the ImageFile it was given, so
+                # it is bound to its own name rather than shadowing the context manager's.
+                image = ImageOps.exif_transpose(handle).convert("RGB")
                 pixel_values = self.transform(image)
         except Exception as exc:
             raise RuntimeError(

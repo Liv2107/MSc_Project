@@ -110,6 +110,11 @@ CONSOLIDATED_COLUMNS: tuple[str, ...] = (
     "generator",
     "held_out_generator",
     "fine_tune_mode",
+    # Which classifier architecture produced the row. Read from the run's own
+    # resolved_config.yaml, so it is available for every run already on disk. Without it
+    # two runs that differ ONLY by head type are indistinguishable in a consolidated
+    # table, which is exactly the linear-versus-cosine comparison this project makes.
+    "head_type",
     "adaptation_percentage",
     "subset_seed",
     "training_seed",
@@ -152,6 +157,7 @@ RUN_SUMMARY_COLUMNS: tuple[str, ...] = (
     "started_at",
     "held_out_generator",
     "fine_tune_mode",
+    "head_type",
     "seed",
     "epochs",
     "learning_rate",
@@ -174,6 +180,7 @@ RECOVERY_SUMMARY_COLUMNS: tuple[str, ...] = (
     "run_id",
     "held_out_generator",
     "fine_tune_mode",
+    "head_type",
     "adaptation_percentage",
     "operating_point",
     "metric",
@@ -193,6 +200,7 @@ RECOVERY_SUMMARY_COLUMNS: tuple[str, ...] = (
     "labelled_images_consumed",
     "trainable_parameters",
     "in_distribution_reference_run_id",
+    "in_distribution_reference_match",
 )
 
 #: Below this, the measured in-distribution-minus-unseen gap is too small for
@@ -222,6 +230,7 @@ class RunRecord:
     started_at: str | None = None
     held_out_generator: str | None = None
     fine_tune_mode: str | None = None
+    head_type: str | None = None
     seed: int | None = None
     epochs: int | None = None
     learning_rate: float | None = None
@@ -353,6 +362,10 @@ def describe_run(run_dir: Path) -> RunRecord | None:
         fine_tune_mode=(
             str(training["fine_tune_mode"]) if training.get("fine_tune_mode") else None
         ),
+        # Runs predating model.head_type saved no such key, and the only head that
+        # existed then was the linear one, so "linear" is the accurate value for them
+        # rather than a guess. A directory with no model block at all stays None.
+        head_type=(str(model.get("head_type", "linear")) if model else None),
         seed=_as_int(reproducibility.get("seed")),
         epochs=_as_int(training.get("epochs")),
         learning_rate=_as_float(training.get("learning_rate")),
@@ -444,6 +457,7 @@ def _base_row(record: RunRecord, protocol: str | None) -> dict[str, Any]:
         experiment_name=record.experiment_name,
         protocol=protocol,
         is_synthetic_smoke=record.is_synthetic_smoke,
+        head_type=record.head_type,
         seed=record.seed,
         epochs=record.epochs,
         learning_rate=record.learning_rate,
@@ -701,6 +715,7 @@ def summarise_runs(
                 "started_at": record.started_at,
                 "held_out_generator": record.held_out_generator,
                 "fine_tune_mode": record.fine_tune_mode,
+                "head_type": record.head_type,
                 "seed": record.seed,
                 "epochs": record.epochs,
                 "learning_rate": record.learning_rate,
@@ -745,8 +760,12 @@ def _standard_deviation(values: Sequence[float]) -> float:
 
 
 def in_distribution_reference(
-    records: Sequence[RunRecord], metric: str, *, held_out_generator: str | None = None
-) -> tuple[float | None, str | None]:
+    records: Sequence[RunRecord],
+    metric: str,
+    *,
+    held_out_generator: str | None = None,
+    starting_checkpoint: str | None = None,
+) -> tuple[float | None, str | None, str | None]:
     """The prevalence-matched in-distribution value a recovery curve is measured against.
 
     Taken from the unseen-generator run's own ``generalisation_gap`` block, because that
@@ -754,25 +773,60 @@ def in_distribution_reference(
     one. Any other in-distribution figure would be measured at a different prevalence and
     would make the gap an arithmetic artefact rather than a generalisation result.
 
-    Returns ``(None, None)`` when no such run exists, so callers cannot silently
+    Which unseen run
+    ----------------
+    Held-out generator alone does NOT identify the run. This project deliberately runs
+    the same generator under more than one classifier head (see
+    ``configs/tiny_unseen_vqdm.yaml`` against ``configs/tiny_unseen_vqdm_cosine.yaml``),
+    so matching on the generator and taking the newest run can quote the ceiling of a
+    model the recovery curve was never started from.
+
+    ``starting_checkpoint`` is the exact link: an adaptation cell records the checkpoint
+    file it reloaded, and that file lives inside the unseen run that produced it. When it
+    is given, the reference comes from that run and no other. The generator match is kept
+    only as a fallback, and the returned ``match`` says which happened
+    (``starting_checkpoint`` or ``held_out_generator``) so a table can never present a
+    fallback as if it were provenance.
+
+    Returns ``(None, None, None)`` when no such run exists, so callers cannot silently
     substitute a value from elsewhere.
     """
 
     gap_key = {"f1": "f1_at_default_threshold"}.get(metric, metric)
-    for record in reversed(
-        [record for record in records if record.experiment_type == "unseen_generator"]
-    ):
+
+    def reference_of(record: RunRecord) -> float | None:
+        if not record.has_metrics:
+            return None
+        entry = (load_metrics(record).get("generalisation_gap") or {}).get(gap_key)
+        return _as_float(entry.get("in_distribution")) if isinstance(entry, dict) else None
+
+    unseen_runs = [record for record in records if record.experiment_type == "unseen_generator"]
+
+    if starting_checkpoint:
+        # The checkpoint path names its own run directory; compare on the directory name
+        # so an absolute path recorded on another machine still resolves.
+        owner = Path(starting_checkpoint).parent.name
+        for record in unseen_runs:
+            if record.run_id != owner:
+                continue
+            value = reference_of(record)
+            if value is not None:
+                return value, record.run_id, "starting_checkpoint"
+        # A named checkpoint that no discovered unseen run owns must not silently fall
+        # through to a different model's ceiling.
+        return None, None, None
+
+    for record in reversed(unseen_runs):
         if not record.has_metrics:
             continue
-        metrics = load_metrics(record)
-        if held_out_generator and metrics.get("held_out_generator") != held_out_generator:
+        if held_out_generator and load_metrics(record).get("held_out_generator") != (
+            held_out_generator
+        ):
             continue
-        entry = (metrics.get("generalisation_gap") or {}).get(gap_key)
-        if isinstance(entry, dict):
-            value = _as_float(entry.get("in_distribution"))
-            if value is not None:
-                return value, record.run_id
-    return None, None
+        value = reference_of(record)
+        if value is not None:
+            return value, record.run_id, "held_out_generator"
+    return None, None, None
 
 
 def summarise_recovery(
@@ -814,6 +868,7 @@ def summarise_recovery(
             row.get("run_id"),
             row.get("held_out_generator"),
             row.get("fine_tune_mode"),
+            row.get("head_type"),
             float(row["adaptation_percentage"]),
             row.get("operating_point"),
         )
@@ -822,7 +877,7 @@ def summarise_recovery(
     # The 0% reference lives in the same run under fine_tune_mode "none"; look it up per
     # (run, operating point) so each curve is measured against its own starting point.
     zero_by_key: dict[tuple[Any, Any, str], float] = {}
-    for (run_id, _held_out, mode, percentage, operating_point), rows in grouped.items():
+    for (run_id, _held_out, mode, _head, percentage, operating_point), rows in grouped.items():
         if percentage != 0.0:
             continue
         for metric in metrics:
@@ -835,7 +890,17 @@ def summarise_recovery(
 
     summary: list[dict[str, Any]] = []
     for key, rows in sorted(grouped.items(), key=lambda item: tuple(str(part) for part in item[0])):
-        run_id, held_out, mode, percentage, operating_point = key
+        run_id, held_out, mode, head_type, percentage, operating_point = key
+        # The checkpoint every cell in this group reloaded. It identifies the unseen run
+        # whose in-distribution ceiling this curve is entitled to be measured against.
+        starting_checkpoint = next(
+            (
+                str(row["starting_checkpoint"])
+                for row in rows
+                if row.get("starting_checkpoint")
+            ),
+            None,
+        )
         if percentage == 0.0:
             continue
         for metric in metrics:
@@ -855,10 +920,15 @@ def summarise_recovery(
             # points and report the difference as a generalisation gap. Leave it
             # undefined instead.
             comparable = metric in THRESHOLD_FREE_METRICS or operating_point == "default"
-            reference, reference_run = (
-                in_distribution_reference(records, metric, held_out_generator=held_out)
+            reference, reference_run, reference_match = (
+                in_distribution_reference(
+                    records,
+                    metric,
+                    held_out_generator=held_out,
+                    starting_checkpoint=starting_checkpoint,
+                )
                 if comparable
-                else (None, None)
+                else (None, None, None)
             )
 
             absolute = None if zero_value is None else mean - zero_value
@@ -877,6 +947,7 @@ def summarise_recovery(
                     "run_id": run_id,
                     "held_out_generator": held_out,
                     "fine_tune_mode": mode,
+                    "head_type": head_type,
                     "adaptation_percentage": percentage,
                     "operating_point": operating_point,
                     "metric": metric,
@@ -915,6 +986,7 @@ def summarise_recovery(
                         None,
                     ),
                     "in_distribution_reference_run_id": reference_run,
+                    "in_distribution_reference_match": reference_match,
                 }
             )
     return summary
@@ -953,6 +1025,7 @@ def degradation_rows(consolidated: Sequence[Mapping[str, Any]]) -> list[dict[str
                 {
                     "run_id": run_id,
                     "held_out_generator": held_out,
+                    "head_type": unseen.get("head_type"),
                     "operating_point": operating_point,
                     "metric": metric,
                     "in_distribution": reference,

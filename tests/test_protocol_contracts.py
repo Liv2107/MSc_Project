@@ -21,6 +21,7 @@ from src.experiments.ablation import (
     validate_ablation_settings,
 )
 from src.experiments.fine_tuning import (
+    assert_starting_checkpoint_compatible,
     build_nested_adaptation_subsets,
     load_adaptation_subsets,
     save_adaptation_subsets,
@@ -365,3 +366,114 @@ def test_mode_comparison_excludes_the_zero_percent_row() -> None:
     full = next(entry for entry in table if entry["fine_tune_mode"] == "full")
     assert full["trainable_parameters"] == [87_456_769]
     assert full["mean_training_seconds"] == pytest.approx(9.0)
+
+
+# ------------------------------------------------------- starting-checkpoint provenance
+
+
+def checkpoint_config(**model: Any) -> dict[str, Any]:
+    """A checkpoint's stored resolved config, as ``load_checkpoint`` returns it."""
+
+    return {
+        "resolved_config": {
+            "model": {
+                "clip_model_name": "openai/clip-vit-base-patch32",
+                "clip_revision": "abc123",
+                **model,
+            },
+            "generators": {"unseen": "vqdm", "train": ["biggan", "adm"]},
+            "data": {"manifest_path": "data/manifests/tiny_genimage.csv"},
+        },
+        "metadata": {"epoch": 5},
+    }
+
+
+def adapting_config(**model: Any) -> dict[str, Any]:
+    return {
+        "model": {
+            "clip_model_name": "openai/clip-vit-base-patch32",
+            "clip_revision": "abc123",
+            **model,
+        },
+        "data": {"manifest_path": "data/manifests/tiny_genimage.csv"},
+    }
+
+
+def test_a_matching_starting_checkpoint_is_accepted() -> None:
+    findings = assert_starting_checkpoint_compatible(
+        checkpoint_config(),
+        adapting_config(),
+        unseen_generator="vqdm",
+        known_generators=["adm", "biggan"],
+        manifest_sha256="deadbeef",
+    )
+    assert findings["warnings"] == []
+    assert findings["manifest_sha256"] == "deadbeef"
+
+
+def test_adapting_a_checkpoint_that_held_out_a_different_generator_is_refused() -> None:
+    with pytest.raises(ValueError, match="held out"):
+        assert_starting_checkpoint_compatible(
+            checkpoint_config(),
+            adapting_config(),
+            unseen_generator="wukong",
+            known_generators=["adm", "biggan"],
+            manifest_sha256=None,
+        )
+
+
+def test_adapting_a_checkpoint_trained_on_other_known_generators_is_refused() -> None:
+    with pytest.raises(ValueError, match="different known generators"):
+        assert_starting_checkpoint_compatible(
+            checkpoint_config(),
+            adapting_config(),
+            unseen_generator="vqdm",
+            known_generators=["adm", "glide"],
+            manifest_sha256=None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("stored_head", "expected_head"),
+    [("cosine", "linear"), ("linear", "cosine")],
+)
+def test_a_checkpoint_from_the_other_classifier_head_is_refused(
+    stored_head: str, expected_head: str
+) -> None:
+    """Both heads name their parameters identically, so shapes alone do not catch this.
+
+    A cosine checkpoint adapted under a linear forward pass is not a continuation of the
+    cosine model's 0%-adaptation result, so the recovery curve would be measured from an
+    origin that was never evaluated.
+    """
+
+    with pytest.raises(ValueError, match="classifier head"):
+        assert_starting_checkpoint_compatible(
+            checkpoint_config(head_type=stored_head),
+            adapting_config(head_type=expected_head),
+            unseen_generator="vqdm",
+            known_generators=["adm", "biggan"],
+            manifest_sha256=None,
+        )
+
+
+def test_a_checkpoint_predating_head_type_counts_as_the_linear_head() -> None:
+    """Runs saved before the head became configurable used the linear head, so their
+    stored config has no ``head_type`` and must still adapt under the linear default."""
+
+    findings = assert_starting_checkpoint_compatible(
+        checkpoint_config(),
+        adapting_config(),
+        unseen_generator="vqdm",
+        known_generators=["adm", "biggan"],
+        manifest_sha256=None,
+    )
+    assert findings["warnings"] == []
+    with pytest.raises(ValueError, match="classifier head"):
+        assert_starting_checkpoint_compatible(
+            checkpoint_config(),
+            adapting_config(head_type="cosine"),
+            unseen_generator="vqdm",
+            known_generators=["adm", "biggan"],
+            manifest_sha256=None,
+        )

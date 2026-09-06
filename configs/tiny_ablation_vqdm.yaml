@@ -1,0 +1,98 @@
+# Fine-tuning-depth ablation on Tiny GenImage for held-out vqdm.
+#
+# Research question: when adapting to a previously unseen generator with limited
+# labelled data, how much of the model needs to be fine-tuned?
+#
+# WHY THIS RUN IS THE ONE THE DEPTH CLAIM RESTS ON.
+#
+# The completed biggan ablation (outputs/ablation-20260816T163436467712Z-fc1a22d8e3-4f83)
+# answered the depth question on a generator that barely degrades in the first place:
+# biggan's 0%-adaptation ROC-AUC is 0.9284 against an in-distribution 0.9374, a drop of
+# 0.009, and head-only adaptation at the 5% budget already reaches 0.9843. Every depth
+# then sits above 0.98 ROC-AUC at every budget, so the depths are compared inside a
+# 0.014-wide band near the ceiling. That is a real result, but it cannot distinguish
+# "shallow adaptation is sufficient" from "there was almost nothing left to recover".
+#
+# vqdm is the case with something to recover: 0.6746 unseen against 0.9664
+# in-distribution, a drop of 0.2918, with recall collapsing to 0.304 at the fixed 0.5
+# threshold. The completed head-only recovery curve reaches only 0.9394 ROC-AUC at the
+# 50% budget and 0.8200 at 5%, so it does NOT saturate and there is genuine headroom for
+# deeper adaptation to occupy. Whether that headroom needs 769 parameters, 7.09M, or
+# 87.46M is the informative form of the depth question, and this run measures it.
+#
+# 3 modes x 4 budgets x 1 subset seed x 1 training seed = 12 adaptation cells, plus the
+# 0% reference recomputed in-run.
+#
+# Everything except the trainable depth is inherited from the completed head-only vqdm
+# recovery run (configs/tiny_recovery_vqdm.yaml): the same starting checkpoint, the same
+# nested adaptation subsets from subset seed 42, the same untouched 500-image balanced
+# vqdm test set (final_test_sha256 861b69f7...), and the same threshold policy. The
+# head_only cells therefore refit cells that run already fitted and act as a
+# reproducibility check on the shared data path, exactly as they did for biggan.
+
+base_config: tiny_genimage_base.yaml
+
+experiment:
+  type: ablation
+  name: tiny_ablation_vqdm
+
+generators:
+  train: [biggan, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  validation: [biggan, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  test: [vqdm]
+  unseen: vqdm
+  include_real_images: true
+
+fine_tuning:
+  percentages: [0.05, 0.10, 0.20, 0.50]
+  subset_seeds: [42]
+  nested_subsets: true
+  adaptation_split_name: adaptation_pool
+  final_test_split_name: unseen_test
+  # The LINEAR-head vqdm leave-one-generator-out run, which is the checkpoint
+  # configs/tiny_recovery_vqdm.yaml adapted from, so the depth comparison and the
+  # existing head-only recovery curve share one 0% origin.
+  #
+  # sha256 3555e68a3396da4b98713bd29b52a56d5411afd96c8386c805ca36d9fc7edd30
+  #
+  # NOT the cosine-head vqdm run (unseen_generator-20260816T230229229836Z-e41f75118f-3e37).
+  # That arm is a separate single-factor architecture comparison and mixing it in here
+  # would change two things at once. assert_starting_checkpoint_compatible checks the
+  # held-out generator and the known-generator set, but it cannot tell the two heads
+  # apart, so this is a decision the config has to get right.
+  starting_checkpoint: outputs/unseen_generator-20260816T191041040059Z-4c30e188fc-e073/best_checkpoint.pt
+  reload_starting_checkpoint_each_run: true
+  fine_tune_mode: head_only
+  adaptation_validation_fraction: 0.2
+
+ablation:
+  modes: [head_only, last_block, full]
+  control_starting_checkpoint: true
+  control_subset_ids: true
+  control_final_test_ids: true
+  training_budget_policy: equal_epochs
+  record_trainable_parameter_names: true
+  record_training_time: true
+
+# PER-MODE LEARNING RATE: CARRIED OVER UNCHANGED, DELIBERATELY NOT RE-PROBED.
+#
+# These are the exact rates pre-declared for the biggan ablation, where they were chosen
+# from a probe on biggan's 5% budget (see configs/tiny_ablation_biggan.yaml for the probe
+# numbers: full fine-tuning collapses to validation F1 0.000 at 1e-3 and recovers to 1.00
+# at 1e-5).
+#
+# They are NOT re-probed on vqdm, for two reasons. Probing on vqdm's adaptation
+# validation would spend part of this arm's labelled budget on hyperparameter search
+# without recording it as consumed, and re-tuning per generator would mean the two
+# ablations no longer differ only by generator. Carrying the rates over keeps the depth
+# comparison between biggan and vqdm interpretable, at the cost of the rates not being
+# optimal for vqdm specifically -- which biases against the deeper modes rather than for
+# them, so it cannot manufacture a "deeper is better" result.
+#
+# Chapter 4 must still state that learning rate is not constant across depths.
+mode_overrides:
+  head_only: null
+  last_block:
+    learning_rate: 0.00001
+  full:
+    learning_rate: 0.00001

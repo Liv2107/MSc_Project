@@ -71,6 +71,7 @@ def make_run(
     status: str | None = "completed",
     experiment_name: str = "tiny_experiment",
     unseen: str | None = None,
+    head_type: str | None = None,
 ) -> Path:
     """Write a minimal but structurally faithful run directory."""
 
@@ -86,6 +87,8 @@ def make_run(
     }
     if unseen is not None:
         config["generators"] = {"unseen": unseen, "train": ["adm"], "test": [unseen]}
+    if head_type is not None:
+        config["model"]["head_type"] = head_type
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     (run_dir / "environment.json").write_text(
         json.dumps({"python": "3.11.15", "cuda_available": False, "packages": {"torch": "2.13.0"}}),
@@ -139,8 +142,17 @@ def unseen_metrics(
 
 
 def recovery_cell(
-    *, percentage: float, f1: float, roc_auc: float, mode: str = "head_only", seed: int = 42
+    *,
+    percentage: float,
+    f1: float,
+    roc_auc: float,
+    mode: str = "head_only",
+    seed: int = 42,
+    starting_run: str = "unseen_generator-20260102T000000000000Z-bbbb-0002",
 ) -> dict[str, Any]:
+    """One adaptation cell. ``starting_run`` names the unseen run whose checkpoint it
+    reloaded, because that path is what links a recovery curve to its own ceiling."""
+
     return {
         "cell_id": f"{mode}_p{int(percentage * 100):02d}_s{seed}",
         "fine_tune_mode": mode if percentage > 0 else "none",
@@ -155,7 +167,7 @@ def recovery_cell(
         "epochs": 10,
         "best_epoch": 5,
         "training_seconds": 100.0,
-        "starting_checkpoint": "/somewhere/best_checkpoint.pt",
+        "starting_checkpoint": f"outputs/{starting_run}/best_checkpoint.pt",
         "cell_checkpoint_sha256": {"best_checkpoint.pt": "cafe1234"},
         "overall": metric_block(f1=f1, roc_auc=roc_auc),
         "at_adaptation_selected_threshold": metric_block(f1=f1 + 0.01, roc_auc=roc_auc,
@@ -473,9 +485,10 @@ def test_gap_closed_is_flagged_unreliable_when_the_measured_gap_is_tiny(
     # An in-distribution/unseen gap far below the reliability threshold.
     tiny = unseen_metrics(in_distribution_f1=0.805, unseen_f1=0.80)
     assert MINIMUM_RELIABLE_GAP > 0.805 - 0.80
+    origin = "unseen_generator-20260101T000000000000Z-aaaa-0001"
     make_run(
         root,
-        "unseen_generator-20260101T000000000000Z-aaaa-0001",
+        origin,
         metrics_filename="unseen_generator_metrics.json",
         metrics=tiny,
         unseen="biggan",
@@ -486,8 +499,8 @@ def test_gap_closed_is_flagged_unreliable_when_the_measured_gap_is_tiny(
         metrics_filename="recovery_metrics.json",
         metrics=recovery_metrics(
             [
-                recovery_cell(percentage=0.0, f1=0.80, roc_auc=0.90),
-                recovery_cell(percentage=0.5, f1=0.95, roc_auc=0.99),
+                recovery_cell(percentage=0.0, f1=0.80, roc_auc=0.90, starting_run=origin),
+                recovery_cell(percentage=0.5, f1=0.95, roc_auc=0.99, starting_run=origin),
             ]
         ),
         unseen="biggan",
@@ -547,8 +560,10 @@ def test_missing_unseen_run_leaves_the_reference_undefined(tmp_path: Path) -> No
         unseen="biggan",
     )
     records = reportable_runs(discover_runs(root))
-    value, run_id = in_distribution_reference(records, "roc_auc", held_out_generator="biggan")
-    assert value is None and run_id is None
+    value, run_id, match = in_distribution_reference(
+        records, "roc_auc", held_out_generator="biggan"
+    )
+    assert value is None and run_id is None and match is None
 
     summary = summarise_recovery(consolidate_runs(records), records=records)
     entry = next(row for row in summary if row["metric"] == "roc_auc")
@@ -576,11 +591,12 @@ def test_the_reference_is_taken_from_the_matching_held_out_generator(tmp_path: P
         unseen="glide",
     )
     records = reportable_runs(discover_runs(root))
-    value, run_id = in_distribution_reference(records, "f1", held_out_generator="biggan")
+    value, run_id, match = in_distribution_reference(records, "f1", held_out_generator="biggan")
     assert value == pytest.approx(0.90)
     assert run_id == "unseen_generator-20260101T000000000000Z-aaaa-0001"
+    assert match == "held_out_generator"
     # A reference must never be borrowed from a different held-out generator's run.
-    other, _ = in_distribution_reference(records, "f1", held_out_generator="glide")
+    other, _, _ = in_distribution_reference(records, "f1", held_out_generator="glide")
     assert other == pytest.approx(0.70)
 
 
@@ -664,3 +680,120 @@ def test_run_record_reportability_requires_completion_metrics_and_non_smoke() ->
     }
     assert not RunRecord(**base, status="completed", is_synthetic_smoke=False).is_reportable
     assert not RunRecord(**base, status="failed", is_synthetic_smoke=False).is_reportable
+
+
+# ------------------------------------------------- reference provenance and head type
+
+
+def test_the_reference_comes_from_the_run_whose_checkpoint_was_adapted(
+    tmp_path: Path,
+) -> None:
+    """Two runs hold out the SAME generator under different heads.
+
+    This is the real configuration of this project (``configs/tiny_unseen_vqdm.yaml``
+    against ``configs/tiny_unseen_vqdm_cosine.yaml``). Matching on the generator alone
+    and taking the newest run would quote the cosine model's in-distribution ceiling
+    against a recovery curve fitted from the linear model's checkpoint.
+    """
+
+    root = tmp_path / "outputs"
+    root.mkdir()
+    linear = "unseen_generator-20260101T000000000000Z-aaaa-0001"
+    cosine = "unseen_generator-20260102T000000000000Z-bbbb-0002"
+    make_run(
+        root,
+        linear,
+        metrics_filename="unseen_generator_metrics.json",
+        metrics=unseen_metrics(held_out="vqdm", in_distribution_f1=0.90),
+        unseen="vqdm",
+    )
+    make_run(
+        root,
+        cosine,
+        metrics_filename="unseen_generator_metrics.json",
+        metrics=unseen_metrics(held_out="vqdm", in_distribution_f1=0.70),
+        unseen="vqdm",
+        head_type="cosine",
+    )
+    make_run(
+        root,
+        "fine_tuning-20260103T000000000000Z-cccc-0003",
+        metrics_filename="recovery_metrics.json",
+        metrics=recovery_metrics(
+            [
+                recovery_cell(percentage=0.0, f1=0.80, roc_auc=0.90, starting_run=linear),
+                recovery_cell(percentage=0.5, f1=0.88, roc_auc=0.96, starting_run=linear),
+            ]
+        ),
+        unseen="vqdm",
+    )
+    records = reportable_runs(discover_runs(root))
+    summary = summarise_recovery(consolidate_runs(records), records=records)
+    entry = next(
+        row for row in summary if row["metric"] == "f1" and row["operating_point"] == "default"
+    )
+    assert entry["in_distribution_reference"] == pytest.approx(0.90)
+    assert entry["in_distribution_reference_run_id"] == linear
+    assert entry["in_distribution_reference_match"] == "starting_checkpoint"
+
+
+def test_a_starting_checkpoint_no_run_owns_leaves_the_reference_undefined(
+    tmp_path: Path,
+) -> None:
+    """A dangling checkpoint path must not fall back to another model's ceiling."""
+
+    root = tmp_path / "outputs"
+    root.mkdir()
+    make_run(
+        root,
+        "unseen_generator-20260101T000000000000Z-aaaa-0001",
+        metrics_filename="unseen_generator_metrics.json",
+        metrics=unseen_metrics(held_out="biggan", in_distribution_f1=0.90),
+        unseen="biggan",
+    )
+    make_run(
+        root,
+        "fine_tuning-20260102T000000000000Z-bbbb-0002",
+        metrics_filename="recovery_metrics.json",
+        metrics=recovery_metrics(
+            [
+                recovery_cell(percentage=0.0, f1=0.80, roc_auc=0.90, starting_run="deleted-run"),
+                recovery_cell(percentage=0.5, f1=0.88, roc_auc=0.96, starting_run="deleted-run"),
+            ]
+        ),
+        unseen="biggan",
+    )
+    records = reportable_runs(discover_runs(root))
+    summary = summarise_recovery(consolidate_runs(records), records=records)
+    entry = next(row for row in summary if row["metric"] == "roc_auc")
+    # The recovery against the run's own 0% point is still measurable.
+    assert entry["absolute_recovery"] == pytest.approx(0.06)
+    assert entry["in_distribution_reference"] is None
+    assert entry["in_distribution_reference_match"] is None
+
+
+def test_head_type_is_recorded_and_defaults_to_linear_for_older_runs(tmp_path: Path) -> None:
+    root = tmp_path / "outputs"
+    root.mkdir()
+    make_run(
+        root,
+        "unseen_generator-20260101T000000000000Z-aaaa-0001",
+        metrics_filename="unseen_generator_metrics.json",
+        metrics=unseen_metrics(held_out="vqdm"),
+        unseen="vqdm",
+    )
+    make_run(
+        root,
+        "unseen_generator-20260102T000000000000Z-bbbb-0002",
+        metrics_filename="unseen_generator_metrics.json",
+        metrics=unseen_metrics(held_out="vqdm"),
+        unseen="vqdm",
+        head_type="cosine",
+    )
+    records = reportable_runs(discover_runs(root))
+    assert [record.head_type for record in records] == ["linear", "cosine"]
+    rows = consolidate_runs(records)
+    assert {row["head_type"] for row in rows} == {"linear", "cosine"}
+    # The two arms of a single-factor comparison must be separable in the tidy table.
+    assert {row["head_type"] for row in degradation_rows(rows)} == {"linear", "cosine"}
+    assert {row["head_type"] for row in summarise_runs(records, rows)} == {"linear", "cosine"}

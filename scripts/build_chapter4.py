@@ -136,6 +136,68 @@ def _read_history(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _depth_reading(rows: Sequence[Mapping[str, Any]], metric: str) -> str:
+    """State what a depth-by-budget figure shows, computed from the rows it plots.
+
+    A hand-written sentence is correct only for the generator it was written about. Once
+    a second generator is ablated the same prose would be reprinted beside different
+    numbers, which is a fabricated interpretation rather than a missing one.
+    """
+
+    points = [
+        (
+            float(row["adaptation_percentage"]),
+            str(row.get("fine_tune_mode")),
+            float(row[metric]),
+        )
+        for row in rows
+        if row.get(metric) is not None
+        and float(row.get("adaptation_percentage") or 0.0) > 0.0
+        and row.get("fine_tune_mode")
+    ]
+    if not points:
+        return f"No adapted cell reported {metric}."
+    smallest = min(budget for budget, _, _ in points)
+    largest = max(budget for budget, _, _ in points)
+    at_small = sorted((value, mode) for budget, mode, value in points if budget == smallest)
+    at_large = sorted((value, mode) for budget, mode, value in points if budget == largest)
+    floor = min(value for _, _, value in points)
+    sentence = (
+        f"At the {smallest * 100:g}% budget {metric} spans "
+        f"{at_small[0][0]:.3f} ({at_small[0][1]}) to {at_small[-1][0]:.3f} ({at_small[-1][1]}), "
+        f"a spread of {at_small[-1][0] - at_small[0][0]:.3f}; "
+        f"at {largest * 100:g}% the spread narrows to "
+        f"{at_large[-1][0] - at_large[0][0]:.3f} "
+        f"({at_large[0][0]:.3f} to {at_large[-1][0]:.3f}). "
+        f"The lowest value anywhere in the grid is {floor:.3f}."
+    )
+    return sentence
+
+
+def _efficiency_reading(rows: Sequence[Mapping[str, Any]], metric: str) -> str:
+    """Compare the cheapest and most expensive depth on the same budget, from the rows."""
+
+    points = [
+        (int(row["trainable_parameters"]), float(row[metric]), float(row["adaptation_percentage"]))
+        for row in rows
+        if row.get(metric) is not None and row.get("trainable_parameters")
+    ]
+    if not points:
+        return f"No adapted cell reported both {metric} and a trainable-parameter count."
+    budget = min(percentage for _, _, percentage in points)
+    at_budget = sorted(
+        (count, value) for count, value, percentage in points if percentage == budget
+    )
+    cheapest, dearest = at_budget[0], at_budget[-1]
+    ratio = dearest[0] / cheapest[0] if cheapest[0] else float("nan")
+    return (
+        f"At the {budget * 100:g}% budget, {cheapest[0]:,} trainable parameters reach "
+        f"{metric} {cheapest[1]:.3f}; {ratio:,.0f}x more trainable parameters "
+        f"({dearest[0]:,}) reach {dearest[1]:.3f}, a difference of "
+        f"{dearest[1] - cheapest[1]:+.3f}."
+    )
+
+
 def _cell_rows(
     consolidated: Sequence[Mapping[str, Any]], operating_point: str
 ) -> list[dict[str, Any]]:
@@ -159,7 +221,7 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
     for record in usable:
         by_type.setdefault(record.experiment_type, []).append(record)
     unseen_runs = by_type.get("unseen_generator") or []
-    ablation = (by_type.get("ablation") or [None])[-1]
+    ablations = by_type.get("ablation") or []
 
     artefacts: list[Artefact] = []
     destination.mkdir(parents=True, exist_ok=True)
@@ -178,7 +240,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
         return None if stored is None else str(stored)
 
     recovery_runs = by_type.get("fine_tuning") or []
-    ablation_generator = held_out_of(ablation)
     default_rows = _cell_rows(consolidated, "default")
 
     def zero_reference(run_id: str | None, metric: str) -> float | None:
@@ -202,11 +263,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             ),
             None,
         )
-
-    ablation_zero = {
-        metric: zero_reference(ablation.run_id if ablation else None, metric)
-        for metric in ("roc_auc", "average_precision", "f1", "accuracy")
-    }
 
     # ---------------------------------------------------- 4.2 degradation
     degradation = degradation_rows(consolidated)
@@ -257,6 +313,7 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 [
                     [
                         row["held_out_generator"],
+                        row["head_type"],
                         row["metric"],
                         row["in_distribution"],
                         row["unseen"],
@@ -268,7 +325,7 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                     for row in degradation
                     if row["operating_point"] == "default"
                 ],
-                ["held_out_generator", "metric", "in_distribution", "unseen",
+                ["held_out_generator", "head_type", "metric", "in_distribution", "unseen",
                  "absolute_drop", "relative_drop", "n", "run_id"],
                 destination / "tab02_degradation",
                 Artefact(
@@ -278,7 +335,9 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                     [record.run_id for record in unseen_runs],
                     ["roc_auc", "average_precision", "f1", "accuracy", "precision", "recall"],
                     "Per-generator degradation at the fixed 0.5 threshold, with the "
-                    "prevalence-matched in-distribution reference beside each value.",
+                    "prevalence-matched in-distribution reference beside each value. The "
+                    "head_type column separates arms that hold out the same generator "
+                    "under different classifier heads.",
                     "Measured on 500 prevalence-matched samples per generator; one run "
                     "each, so no interval is implied and no significance is claimed.",
                 ),
@@ -340,23 +399,45 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 )
             )
 
-    # ---------------------------------------------------- 4.4 depth comparison
-    if ablation:
+    # ---------------------------------------------------- 4.4-4.7, once per ablation
+    # One depth study per ablation run. Reporting only the newest would silently delete
+    # an earlier generator's depth comparison from the chapter the moment a second
+    # generator is ablated, which is the same failure the recovery loop above avoids.
+    for ablation in ablations:
+        ablation_generator = held_out_of(ablation)
+        suffix = f"_{ablation_generator}"
+        ablation_zero = {
+            metric: zero_reference(ablation.run_id, metric)
+            for metric in ("roc_auc", "average_precision", "f1", "accuracy")
+        }
+        # ---------------------------------------------------- 4.4 depth comparison
         ablation_default = [row for row in default_rows if row.get("run_id") == ablation.run_id]
-        for index, (metric, label, note) in enumerate(
+        # Read the actual per-depth rates out of the run rather than restating the ones a
+        # previous ablation happened to use; the override is a declared fairness caveat.
+        rates = sorted(
+            {
+                (str(row.get("fine_tune_mode")), float(row["learning_rate"]))
+                for row in ablation_default
+                if row.get("learning_rate") is not None and row.get("fine_tune_mode")
+            }
+        )
+        learning_rate_caveat = (
+            "Learning rate is NOT constant across depths ("
+            + "; ".join(f"{mode} {rate:.0e}" for mode, rate in rates)
+            + "), a pre-declared override recorded in the run's "
+            "controls.mode_overrides_applied."
+            if len({rate for _, rate in rates}) > 1
+            else "Learning rate is constant across depths."
+        )
+        for index, (metric, label) in enumerate(
             (
-                ("roc_auc", "ROC-AUC (threshold-free)",
-                 "Every depth exceeds 0.98 ROC-AUC at every budget, including the "
-                 "769-parameter head; ranking is close to saturated throughout."),
-                ("f1", "F1 at the fixed 0.5 threshold",
-                 "At a fixed 0.5 prior the depths separate sharply at small budgets: "
-                 "full reaches 0.978 at 5% where head-only reaches 0.852."),
-                ("average_precision", "PR-AUC (average precision, threshold-free)",
-                 "PR-AUC mirrors ROC-AUC and is above 0.98 for every depth and budget, "
-                 "confirming the ranking result is not an artefact of class balance."),
+                ("roc_auc", "ROC-AUC (threshold-free)"),
+                ("f1", "F1 at the fixed 0.5 threshold"),
+                ("average_precision", "PR-AUC (average precision, threshold-free)"),
             ),
             start=3,
         ):
+            note = _depth_reading(ablation_default, metric)
             figure, _ = plot_metric_by_depth_and_budget(
                 ablation_default,
                 metric_name=metric,
@@ -371,17 +452,15 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             artefacts.append(
                 _save_figure(
                     figure,
-                    destination / f"fig{index:02d}_depth_{metric}",
+                    destination / f"fig{index:02d}_depth_{metric}{suffix}",
                     Artefact(
-                        f"fig{index:02d}_depth_{metric}",
+                        f"fig{index:02d}_depth_{metric}{suffix}",
                         "figure",
                         "4.4 Fine-tuning depth",
                         [ablation.run_id],
                         [metric],
                         note,
-                        "Learning rate is NOT constant across depths (head_only 1e-3; "
-                        "last_block and full 1e-5, pre-declared because 1e-3 collapses "
-                        "full fine-tuning to F1 0.000). Single seed; no error bars.",
+                        f"{learning_rate_caveat} Single seed; no error bars.",
                     ),
                 )
             )
@@ -395,15 +474,14 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             artefacts.append(
                 _save_figure(
                     figure,
-                    destination / f"fig{index:02d}_depth_recovery_{metric}",
+                    destination / f"fig{index:02d}_depth_recovery_{metric}{suffix}",
                     Artefact(
-                        f"fig{index:02d}_depth_recovery_{metric}",
+                        f"fig{index:02d}_depth_recovery_{metric}{suffix}",
                         "figure",
                         "4.4 Fine-tuning depth",
                         [ablation.run_id],
                         [metric],
-                        "All three depths improve monotonically with budget and converge "
-                        "as data increases; the depth gap is widest at 5%.",
+                        _depth_reading(ablation_default, metric),
                         "Per-depth learning rates differ (see 4.4 caveat); single seed, so "
                         "the plotted points are individual fits, not means over repeats.",
                     ),
@@ -438,24 +516,28 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             artefacts.append(
                 _save_figure(
                     figure,
-                    destination / "fig08_validation_trajectories",
+                    destination / f"fig08_validation_trajectories{suffix}",
                     Artefact(
-                        "fig08_validation_trajectories",
+                        f"fig08_validation_trajectories{suffix}",
                         "figure",
                         "4.4 Fine-tuning depth",
                         [ablation.run_id],
                         ["f1 (adaptation validation)"],
-                        "Full fine-tuning reaches its best validation F1 within one or two "
-                        "epochs, while shallower depths climb more slowly.",
+                        "Selected epoch per depth: "
+                        + ", ".join(
+                            f"{mode} at epoch {epoch}" for mode, epoch in sorted(selected.items())
+                        )
+                        + ".",
                         "Adaptation-VALIDATION F1, not test F1, and it is measured on only "
                         "160 images at this budget; shown for convergence behaviour only.",
                     ),
                 )
             )
 
-    # ------------------------------------- 4.5 why ROC-AUC saturates but F1@0.5 differs
-    if ablation:
+        # ------------------------------------- 4.5 why ROC-AUC saturates but F1@0.5 differs
         sweeps: dict[str, Any] = {}
+        sweep_peaks: dict[str, tuple[float, float, float]] = {}
+        missed_fakes: dict[str, tuple[int, int]] = {}
         panels: list[tuple[str, list[float], list[float]]] = []
         reference: dict[str, float] = {}
         metrics_payload = load_metrics(ablation)
@@ -465,7 +547,16 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             if not path.is_file():
                 continue
             labels, scores = _read_predictions(path)
-            sweeps[mode] = threshold_sweep(labels, scores, metric="f1")
+            sweep = threshold_sweep(labels, scores, metric="f1")
+            sweeps[mode] = sweep
+            # Peak F1, the threshold it occurs at, and F1 at the fixed 0.5 prior, so the
+            # figure's caption states the separation it actually shows.
+            grid, values = sweep
+            peak = max(range(len(values)), key=lambda i: values[i])
+            half = min(range(len(grid)), key=lambda i: abs(grid[i] - 0.5))
+            sweep_peaks[mode] = (float(grid[peak]), float(values[peak]), float(values[half]))
+            fakes = [s for s, y in zip(scores, labels, strict=True) if y == 1]
+            missed_fakes[mode] = (sum(1 for s in fakes if s < 0.5), len(fakes))
             panels.append(
                 (
                     mode,
@@ -476,9 +567,8 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             cell = next(
                 (c for c in metrics_payload["cells"] if c.get("cell_id") == cell_id), None
             )
-            chosen = (
-                ((cell or {}).get("thresholds") or {}).get("adaptation_validation_selected") or {}
-            ).get("value")
+            thresholds = (cell or {}).get("thresholds") or {}
+            chosen = (thresholds.get("adaptation_validation_selected") or {}).get("value")
             if chosen is not None:
                 reference[mode] = float(chosen)
 
@@ -495,17 +585,20 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             artefacts.append(
                 _save_figure(
                     figure,
-                    destination / "fig09_threshold_response",
+                    destination / f"fig09_threshold_response{suffix}",
                     Artefact(
-                        "fig09_threshold_response",
+                        f"fig09_threshold_response{suffix}",
                         "figure",
                         "4.5 Ranking versus operating point",
                         [ablation.run_id],
                         ["f1 swept over thresholds", "adaptation-selected threshold"],
-                        "Full fine-tuning holds F1 above 0.95 across almost the entire "
-                        "threshold range, while head-only and last-block peak at low "
-                        "thresholds and fall away at 0.5 -- so their F1@0.5 deficit is "
-                        "largely threshold placement, not worse ranking.",
+                        "Peak F1 and the threshold it occurs at, per depth: "
+                        + ", ".join(
+                            f"{mode} {peak:.3f} at {position:.2f} (F1@0.5 {half:.3f})"
+                            for mode, (position, peak, half) in sorted(sweep_peaks.items())
+                        )
+                        + ". A gap between peak F1 and F1@0.5 is threshold placement, "
+                        "not worse ranking.",
                         "Derived from saved per-sample scores of a single cell per depth "
                         "at one budget; the curves are not averaged over seeds.",
                     ),
@@ -515,31 +608,33 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             figure, _ = plot_score_distributions(
                 panels,
                 title=(
-                    f"Predicted-probability distributions on held-out {ablation_generator} at the "
-                    f"{MECHANISM_BUDGET * 100:g}% budget"
+                    "Predicted-probability distributions on held-out "
+                    f"{ablation_generator} at the {MECHANISM_BUDGET * 100:g}% budget"
                 ),
             )
             artefacts.append(
                 _save_figure(
                     figure,
-                    destination / "fig10_score_distributions",
+                    destination / f"fig10_score_distributions{suffix}",
                     Artefact(
-                        "fig10_score_distributions",
+                        f"fig10_score_distributions{suffix}",
                         "figure",
                         "4.5 Ranking versus operating point",
                         [ablation.run_id],
                         ["per-sample predicted probability"],
-                        "Full fine-tuning pushes almost all held-out fakes to saturated "
-                        "probabilities, leaving 4 of 250 below 0.5; head-only leaves 63 of "
-                        "250 fakes in the intermediate band below the threshold.",
+                        "Held-out fakes scored below 0.5, per depth: "
+                        + ", ".join(
+                            f"{mode} {below} of {total}"
+                            for mode, (below, total) in sorted(missed_fakes.items())
+                        )
+                        + ".",
                         "Log-odds axis, needed because the scores saturate; bin counts are "
                         "for one cell per depth at one budget.",
                     ),
                 )
             )
 
-    # ---------------------------------------------------- 4.6 parameter efficiency
-    if ablation:
+        # ---------------------------------------------------- 4.6 parameter efficiency
         adapted = [
             row
             for row in default_rows
@@ -559,16 +654,14 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             artefacts.append(
                 _save_figure(
                     figure,
-                    destination / f"fig{index:02d}_parameter_efficiency_{metric}",
+                    destination / f"fig{index:02d}_parameter_efficiency_{metric}{suffix}",
                     Artefact(
-                        f"fig{index:02d}_parameter_efficiency_{metric}",
+                        f"fig{index:02d}_parameter_efficiency_{metric}{suffix}",
                         "figure",
                         "4.6 Parameter efficiency",
                         [ablation.run_id],
                         [metric, "trainable_parameters"],
-                        "769 trainable parameters (0.0009% of the model) already achieve "
-                        "0.984 ROC-AUC at 5%; 113,000x more trainable parameters buys "
-                        "about 0.014 more ROC-AUC.",
+                        _efficiency_reading(adapted, metric),
                         "Parameter count is not compute cost, and the depths were trained "
                         "at different learning rates, so this is not a controlled "
                         "efficiency comparison.",
@@ -576,131 +669,129 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 )
             )
 
-    # ---------------------------------------------------- 4.4/4.9 summary table
-    summary_rows: list[list[Any]] = []
-    by_key: dict[tuple[str, float], dict[str, Mapping[str, Any]]] = {}
-    for row in consolidated:
-        if row.get("experiment_type") not in {"fine_tuning", "ablation"}:
-            continue
-        if row.get("generator") is not None or row.get("run_id") != (
-            ablation.run_id if ablation else None
-        ):
-            continue
-        key = (str(row.get("fine_tune_mode")), float(row.get("adaptation_percentage") or 0.0))
-        by_key.setdefault(key, {})[str(row.get("operating_point"))] = row
+        # ---------------------------------------------------- 4.4/4.9 summary table
+        summary_rows: list[list[Any]] = []
+        by_key: dict[tuple[str, float], dict[str, Mapping[str, Any]]] = {}
+        for row in consolidated:
+            if row.get("experiment_type") not in {"fine_tuning", "ablation"}:
+                continue
+            if row.get("generator") is not None or row.get("run_id") != ablation.run_id:
+                continue
+            key = (str(row.get("fine_tune_mode")), float(row.get("adaptation_percentage") or 0.0))
+            by_key.setdefault(key, {})[str(row.get("operating_point"))] = row
 
-    def sort_key(item: tuple[tuple[str, float], Any]) -> tuple[Any, ...]:
-        (mode, budget), _ = item
-        order = MODE_ORDER.index(mode) if mode in MODE_ORDER else len(MODE_ORDER)
-        return (budget != 0.0, order, budget)
+        def sort_key(item: tuple[tuple[str, float], Any]) -> tuple[Any, ...]:
+            (mode, budget), _ = item
+            order = MODE_ORDER.index(mode) if mode in MODE_ORDER else len(MODE_ORDER)
+            return (budget != 0.0, order, budget)
 
-    for (mode, budget), points in sorted(by_key.items(), key=sort_key):
-        default = points.get("default")
-        adapt = points.get("adaptation_selected")
-        base = points.get("baseline_unchanged")
-        if default is None:
-            continue
-        summary_rows.append(
-            [
-                mode,
-                f"{budget * 100:g}%",
-                default.get("trainable_parameters"),
-                default.get("labelled_images_consumed"),
-                # Rendered in scientific notation: the per-depth learning rates differ by
-                # two orders of magnitude, and fixed-point rounding would print 1e-05 as
-                # 0.0000 and hide the very confound this column exists to disclose.
-                (
-                    None
-                    if default.get("learning_rate") is None
-                    or default.get("trainable_parameters") is None
-                    else f"{float(default['learning_rate']):.0e}"
-                ),
-                default.get("roc_auc"),
-                default.get("average_precision"),
-                default.get("f1"),
-                (adapt or {}).get("threshold"),
-                (adapt or {}).get("f1"),
-                (base or {}).get("threshold"),
-                (base or {}).get("f1"),
-            ]
-        )
-    if summary_rows:
-        artefacts.append(
-            _write_table(
-                summary_rows,
+        for (mode, budget), points in sorted(by_key.items(), key=sort_key):
+            default = points.get("default")
+            adapt = points.get("adaptation_selected")
+            base = points.get("baseline_unchanged")
+            if default is None:
+                continue
+            summary_rows.append(
                 [
-                    "fine_tune_mode",
-                    "adaptation_budget",
-                    "trainable_params",
-                    "labelled_images",
-                    "learning_rate",
-                    "ROC_AUC",
-                    "PR_AUC",
-                    "F1_at_0.5",
-                    "adaptation_selected_threshold",
-                    "F1_at_adaptation_threshold",
-                    "baseline_threshold",
-                    "F1_at_baseline_threshold",
-                ],
-                destination / "tab01_chapter4_summary",
-                Artefact(
-                    "tab01_chapter4_summary",
-                    "table",
-                    "4.4 Fine-tuning depth (master results table)",
-                    [ablation.run_id] if ablation else [],
-                    ["roc_auc", "average_precision", "f1 at three operating points",
-                     "trainable_parameters", "learning_rate"],
-                    "The complete depth x budget grid with every F1 labelled by the "
-                    "threshold it was measured at.",
-                    "Three F1 columns at three DIFFERENT thresholds; never compare across "
-                    "them without saying so. Learning rate varies by depth by design.",
-                ),
+                    mode,
+                    f"{budget * 100:g}%",
+                    default.get("trainable_parameters"),
+                    default.get("labelled_images_consumed"),
+                    # Rendered in scientific notation: the per-depth learning rates differ by
+                    # two orders of magnitude, and fixed-point rounding would print 1e-05 as
+                    # 0.0000 and hide the very confound this column exists to disclose.
+                    (
+                        None
+                        if default.get("learning_rate") is None
+                        or default.get("trainable_parameters") is None
+                        else f"{float(default['learning_rate']):.0e}"
+                    ),
+                    default.get("roc_auc"),
+                    default.get("average_precision"),
+                    default.get("f1"),
+                    (adapt or {}).get("threshold"),
+                    (adapt or {}).get("f1"),
+                    (base or {}).get("threshold"),
+                    (base or {}).get("f1"),
+                ]
             )
-        )
-
-    # ---------------------------------------------------- 4.7 reproduction check
-    # The ablation refits head-only cells that an earlier recovery run already fitted, so
-    # the two can be compared -- but only for the SAME held-out generator. Pairing the
-    # ablation against whichever recovery run happens to be newest would compare cells
-    # fitted on different generators and report the difference as non-determinism.
-    matching_recovery = next(
-        (run for run in recovery_runs if held_out_of(run) == ablation_generator), None
-    )
-    if ablation and matching_recovery:
-        ablation_cells = {
-            r["cell_id"]: r
-            for r in csv.DictReader((ablation.run_dir / "ablation_cells.csv").open())
-        }
-        recovery_cells = {
-            r["cell_id"]: r
-            for r in csv.DictReader((matching_recovery.run_dir / "recovery_cells.csv").open())
-        }
-        shared = sorted(set(ablation_cells) & set(recovery_cells))
-        rows = []
-        for cell_id in shared:
-            for metric in ("roc_auc", "average_precision", "f1"):
-                a = float(recovery_cells[cell_id][metric])
-                b = float(ablation_cells[cell_id][metric])
-                rows.append([cell_id, metric, a, b, "exact" if a == b else f"{b - a:+.3e}"])
-        if rows:
+        if summary_rows:
             artefacts.append(
                 _write_table(
-                    rows,
-                    ["cell", "metric", "recovery_run", "ablation_run", "difference"],
-                    destination / "tab03_reproduction_check",
+                    summary_rows,
+                    [
+                        "fine_tune_mode",
+                        "adaptation_budget",
+                        "trainable_params",
+                        "labelled_images",
+                        "learning_rate",
+                        "ROC_AUC",
+                        "PR_AUC",
+                        "F1_at_0.5",
+                        "adaptation_selected_threshold",
+                        "F1_at_adaptation_threshold",
+                        "baseline_threshold",
+                        "F1_at_baseline_threshold",
+                    ],
+                    destination / f"tab01_chapter4_summary{suffix}",
                     Artefact(
-                        "tab03_reproduction_check",
+                        f"tab01_chapter4_summary{suffix}",
                         "table",
-                        f"4.7 Validity and reproducibility ({ablation_generator})",
-                        [matching_recovery.run_id, ablation.run_id],
-                        ["roc_auc", "average_precision", "f1"],
-                        "The head-only cells refitted inside the depth ablation reproduce "
-                        "the earlier independent recovery run bit-exactly on every metric.",
-                        "Demonstrates determinism of the shared data path and seeding on "
-                        "one machine; it is not evidence about across-seed variability.",
+                        "4.4 Fine-tuning depth (master results table)",
+                        [ablation.run_id],
+                        ["roc_auc", "average_precision", "f1 at three operating points",
+                         "trainable_parameters", "learning_rate"],
+                        "The complete depth x budget grid with every F1 labelled by the "
+                        "threshold it was measured at.",
+                        "Three F1 columns at three DIFFERENT thresholds; never compare across "
+                        "them without saying so. Learning rate varies by depth by design.",
                     ),
                 )
             )
+
+        # ---------------------------------------------------- 4.7 reproduction check
+        # The ablation refits head-only cells that an earlier recovery run already fitted, so
+        # the two can be compared -- but only for the SAME held-out generator. Pairing the
+        # ablation against whichever recovery run happens to be newest would compare cells
+        # fitted on different generators and report the difference as non-determinism.
+        matching_recovery = next(
+            (run for run in recovery_runs if held_out_of(run) == ablation_generator), None
+        )
+        if matching_recovery:
+            ablation_cells = {
+                r["cell_id"]: r
+                for r in csv.DictReader((ablation.run_dir / "ablation_cells.csv").open())
+            }
+            recovery_cells = {
+                r["cell_id"]: r
+                for r in csv.DictReader((matching_recovery.run_dir / "recovery_cells.csv").open())
+            }
+            shared = sorted(set(ablation_cells) & set(recovery_cells))
+            rows = []
+            for cell_id in shared:
+                for metric in ("roc_auc", "average_precision", "f1"):
+                    a = float(recovery_cells[cell_id][metric])
+                    b = float(ablation_cells[cell_id][metric])
+                    rows.append([cell_id, metric, a, b, "exact" if a == b else f"{b - a:+.3e}"])
+            if rows:
+                artefacts.append(
+                    _write_table(
+                        rows,
+                        ["cell", "metric", "recovery_run", "ablation_run", "difference"],
+                        destination / f"tab03_reproduction_check{suffix}",
+                        Artefact(
+                            f"tab03_reproduction_check{suffix}",
+                            "table",
+                            f"4.7 Validity and reproducibility ({ablation_generator})",
+                            [matching_recovery.run_id, ablation.run_id],
+                            ["roc_auc", "average_precision", "f1"],
+                            "The head-only cells refitted inside the depth ablation reproduce "
+                            "the earlier independent recovery run bit-exactly on every metric.",
+                            "Demonstrates determinism of the shared data path and seeding on "
+                            "one machine; it is not evidence about across-seed variability.",
+                        ),
+                    )
+                )
 
     # ---------------------------------------------------- inventory
     artefacts.append(
@@ -711,6 +802,7 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                     row["experiment_type"],
                     row["status"],
                     row["held_out_generator"],
+                    row["head_type"],
                     row["evaluated_conditions"],
                     row["cells"],
                     row["seed"],
@@ -718,7 +810,8 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 ]
                 for row in summarise_runs(records, consolidated)
             ],
-            ["run_id", "protocol", "status", "held_out", "conditions", "cells", "seed", "torch"],
+            ["run_id", "protocol", "status", "held_out", "head_type", "conditions", "cells",
+             "seed", "torch"],
             destination / "tab04_experiment_inventory",
             Artefact(
                 "tab04_experiment_inventory",

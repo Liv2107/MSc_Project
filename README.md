@@ -145,6 +145,23 @@ python -m scripts.build_report --output outputs/report
 Step 6 is safe to run at any point and is not a training step: it only reads saved run
 directories, so it can be re-run after every experiment.
 
+The Tiny GenImage instances of steps 3-5 are the `configs/tiny_*` files. For the primary
+held-out generator, vqdm, they are:
+
+```powershell
+# 0% reference (completed).
+python main.py --config configs/tiny_unseen_vqdm.yaml
+# Head-only recovery curve at 5/10/20/50% (completed).
+python main.py --config configs/tiny_recovery_vqdm.yaml
+# Fine-tuning-depth comparison over the SAME subsets and test set.
+python main.py --config configs/tiny_ablation_vqdm.yaml
+```
+
+`configs/tiny_ablation_vqdm.yaml` carries the per-depth learning rates over from
+`configs/tiny_ablation_biggan.yaml` unchanged rather than re-probing them on vqdm; the
+file explains why, and Chapter 4 must state that learning rate is not constant across
+depths.
+
 ### Resuming an interrupted run
 
 The baseline and unseen-generator protocols each train one long model, so losing the
@@ -255,7 +272,7 @@ arithmetic it performs is over numbers a run already saved, and each derived qua
 named so it cannot be mistaken for a measurement (`positive_prevalence`,
 `absolute_recovery`, `relative_improvement`, `gap_closed_fraction`).
 
-Three rules it enforces, each of which is a unit test in
+Five rules it enforces, each of which is a unit test in
 `tests/test_aggregation_contracts.py`:
 
 - **Nothing is imputed.** A quantity no run measured stays `None` and renders as
@@ -266,6 +283,19 @@ Three rules it enforces, each of which is a unit test in
   at the default threshold, so it is quoted as a ceiling only for threshold-free metrics
   or at the default operating point. Comparing an F1 at an adaptation-selected threshold
   against one at 0.5 would report a threshold change as a generalisation gap.
+- **The in-distribution ceiling comes from the run that was actually adapted.** A held-out
+  generator does not identify a run: this project deliberately holds out the same
+  generator under two classifier heads (`configs/tiny_unseen_vqdm.yaml` against
+  `configs/tiny_unseen_vqdm_cosine.yaml`). The reference is therefore resolved from the
+  `starting_checkpoint` each adaptation cell recorded, which names the unseen run that
+  produced it, and `in_distribution_reference_match` says whether the match was that
+  provenance link or the weaker generator fallback. A checkpoint no discovered run owns
+  leaves the ceiling `undefined` rather than quoting a different model's.
+- **`head_type` is a column, not a footnote.** Every consolidated, degradation, recovery,
+  and inventory row carries the classifier head, read from the run's own
+  `resolved_config.yaml`, so two arms of a single-factor architecture comparison are never
+  indistinguishable in a table. Runs predating `model.head_type` report `linear`, which is
+  the head they used.
 
 `gap_closed_fraction` carries a `gap_closed_is_reliable` flag. When the measured
 in-distribution-minus-unseen gap is smaller than `MINIMUM_RELIABLE_GAP` (0.02), the

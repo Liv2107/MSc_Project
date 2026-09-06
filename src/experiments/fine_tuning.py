@@ -351,6 +351,20 @@ def assert_starting_checkpoint_compatible(
     stored_revision = (stored.get("model") or {}).get("clip_revision")
     if stored_revision and stored_revision != config["model"].get("clip_revision"):
         raise ValueError("starting checkpoint was trained against a different CLIP revision")
+    # The classifier architecture must match. A linear and a cosine head both expose
+    # ``classifier.classifier.{weight,bias}``, so a cosine checkpoint loads into a linear
+    # detector without a shape error: only the extra ``log_scale`` is missing, and
+    # ``strict=True`` catches that direction but not the reverse. Adapting one head's
+    # weights under the other head's forward pass would silently change what the
+    # 0%-adaptation origin of the recovery curve actually is, so it is refused here.
+    stored_head = str((stored.get("model") or {}).get("head_type") or "linear")
+    expected_head = str(config["model"].get("head_type", "linear"))
+    if stored_head != expected_head:
+        raise ValueError(
+            f"starting checkpoint uses the {stored_head!r} classifier head, this run "
+            f"builds the {expected_head!r} head; the adapted model would not be a "
+            "continuation of the checkpoint's 0%-adaptation result"
+        )
     stored_generators = stored.get("generators") or {}
     stored_unseen = stored_generators.get("unseen")
     if stored_unseen and stored_unseen != unseen_generator:
