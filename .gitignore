@@ -27,6 +27,7 @@ data/**
 !data/README.md
 !data/GENIMAGE.md
 !data/manifest_template.csv
+!data/external/README.md
 checkpoints/**
 !checkpoints/README.md
 outputs/**

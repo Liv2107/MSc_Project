@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.experiments.ablation import run_ablation
 from src.experiments.baseline import run_baseline
+from src.experiments.external_challenge import run_external_challenge
 from src.experiments.fine_tuning import run_fine_tuning
 from src.experiments.unseen_generator import run_unseen_generator
 from src.utils.config import load_config
@@ -49,6 +50,7 @@ def run(config_path: Path, *, resume_from: Path | None = None) -> Path | None:
         "unseen_generator": run_unseen_generator,
         "fine_tuning": run_fine_tuning,
         "ablation": run_ablation,
+        "external_challenge": run_external_challenge,
     }
     if resume_from is not None and experiment_type not in RESUMABLE_EXPERIMENTS:
         raise ValueError(

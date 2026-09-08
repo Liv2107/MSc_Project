@@ -1333,13 +1333,31 @@ def limitations(ctx: Context) -> list[dict[str, Any]]:
         },
         {
             "limitation": "Internal benchmark, not external generalisation",
-            "evidence": "all images originate from the Tiny GenImage subset "
+            "evidence": "all images in Chapter 4 originate from the Tiny GenImage subset "
             "(sample_count 34,999) built from one Kaggle mirror of GenImage",
             "consequence": (
-                "Every result measures generalisation to a generator held out of one "
-                "benchmark assembled at one time. It does not measure generalisation to "
-                "generators released after that benchmark, which is what the external "
-                "challenge in Chapter 5 is designed to probe."
+                "Every Chapter 4 result measures generalisation to a generator held out "
+                "of one benchmark assembled at one time. It does not measure "
+                "generalisation to generators released after that benchmark; the "
+                "separately-reported external challenge probes that, at a much smaller "
+                "sample size, and is never merged into these tables."
+            ),
+        },
+        {
+            "limitation": "External challenge is directional, and its generator is "
+            "unidentifiable",
+            "evidence": "200 images (100 generated + 100 authentic), produced through an "
+            "assistant-mediated hosted image-generation tool that does not report which "
+            "underlying image model it used; one prompt distribution, one session",
+            "consequence": (
+                "The external number cannot be attributed to any named architecture, and "
+                "its sample size is the pre-registered minimum-reportable tier rather "
+                "than the recommended tier that would match the internal unseen-test "
+                "resolution. It also carries two uncontrolled confounds: the generated "
+                "images were produced at 1254px and downscaled far more than any "
+                "internal image, and the prompt set yields a cleaner photographic style "
+                "than the ImageNet-derived authentic pool. Report it as a directional "
+                "probe, not as evidence of external generalisation."
             ),
         },
     ]

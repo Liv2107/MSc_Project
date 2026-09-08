@@ -1,0 +1,87 @@
+# Contemporary OpenAI/Astra-mediated image-generation challenge, v1.
+#
+# EVALUATION ONLY. Nothing in this configuration trains, fine-tunes, or selects. The
+# `training` block is inherited so the resolved config records the settings the frozen
+# detectors were produced under; no gradient step is taken from this file.
+#
+# ROUTE. This is Route B of the pre-registered design in section 15 of RESULTS_NOTES.md.
+# The images were produced by an assistant-mediated hosted image-generation tool
+# (Codex `image_gen.imagegen`), which selects an underlying GPT Image model and does not
+# report which one it used. The generator therefore CANNOT be attributed to a named
+# architecture. It is recorded as `astra_mediated_unidentified`, and no architectural
+# claim may be attached to any number produced from this config. Route A (direct Images
+# API with a pinned model id) remains the recommended design and was not available: this
+# environment has no OpenAI SDK and no credential.
+#
+# SAMPLE SIZE. 100 generated images were available, so the evaluation set is the
+# pre-registered "minimum reportable" tier (100 per class, 200 total), not the
+# recommended 250-per-class tier that would match the internal unseen-test resolution.
+# The set is therefore directional: it is reported with that limitation stated, and it is
+# never merged into the Chapter 4 internal benchmark tables.
+#
+# FROZEN DETECTORS. Every checkpoint below existed and was hashed before the external
+# manifest was built. The primary detector is nominated here, in advance, so the reported
+# headline cannot be a post-hoc pick of whichever checkpoint scored best. All nominated
+# checkpoints are reported.
+
+base_config: tiny_genimage_base.yaml
+
+experiment:
+  type: external_challenge
+  name: external_challenge_astra_mediated_v1
+
+# Recorded for provenance: these are the generators the PRIMARY frozen detector was
+# trained on. This config selects no training data.
+generators:
+  train: [biggan, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  validation: [biggan, stable_diffusion_v1_5, wukong, adm, glide, midjourney]
+  test: [astra_mediated_unidentified]
+  unseen: astra_mediated_unidentified
+  include_real_images: true
+
+external_challenge:
+  challenge_id: contemporary_openai_astra_mediated_v1
+  manifest_path: data/manifests/external_challenge_v1.csv
+  audit_path: data/manifests/external_challenge_v1.audit.json
+  split_name: external_test
+  generation_route: astra_mediated_hosted_image_generation_tool
+  generator_identity_known: false
+  adaptation_permitted: false
+  threshold_reselection_permitted: false
+
+  # The detector whose external number is the headline result. Nominated before the
+  # evaluation ran: it is the leave-one-generator-out detector the dissertation's main
+  # VQDM degradation and recovery results are built on.
+  primary_checkpoint_run_id: unseen_generator-20260816T191041040059Z-4c30e188fc-e073
+
+  # Every frozen checkpoint that survives in outputs/ and can be scored without any
+  # further training. Recovery and depth-ablation cells kept only checkpoint digests,
+  # not weights, so an adapted detector cannot be scored here without re-running
+  # training; step 7 of the protocol (recovery against the external set) is therefore
+  # out of reach and is reported as not done rather than approximated.
+  frozen_checkpoints:
+    - run_id: unseen_generator-20260816T191041040059Z-4c30e188fc-e073
+      role: primary_vqdm_held_out_linear
+      checkpoint: best_checkpoint.pt
+      sha256: 3555e68a3396da4b98713bd29b52a56d5411afd96c8386c805ca36d9fc7edd30
+      note: >-
+        Leave-one-generator-out detector holding out vqdm, linear head. The detector
+        behind the reported VQDM zero-shot and recovery curves.
+    - run_id: baseline-20260809T150824861195Z-4c050175ac-2692
+      role: all_seven_generators_seen_baseline
+      checkpoint: best_checkpoint.pt
+      note: >-
+        Reference detector trained on all seven Tiny GenImage generators. Its external
+        number is the best case an internal-benchmark detector can offer.
+    - run_id: unseen_generator-20260816T230229229836Z-e41f75118f-3e37
+      role: vqdm_held_out_cosine
+      checkpoint: best_checkpoint.pt
+      note: >-
+        Confirmatory cosine-head variant of the primary detector, parameter-matched to
+        within one parameter.
+    - run_id: unseen_generator-20260808T151948963300Z-c74c3e0db3-363b
+      role: biggan_held_out_linear
+      checkpoint: best_checkpoint.pt
+      note: >-
+        Leave-one-generator-out detector holding out biggan; vqdm was in its training
+        set. Included so the external result is not read off a single detector.

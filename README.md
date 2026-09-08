@@ -157,6 +157,23 @@ python main.py --config configs/tiny_recovery_vqdm.yaml
 python main.py --config configs/tiny_ablation_vqdm.yaml
 ```
 
+Two further steps sit outside that internal sequence and are described under
+[External contemporary-generator challenge](#external-contemporary-generator-challenge)
+and [The consolidated results summary](#the-consolidated-results-summary):
+
+```powershell
+# 7. External challenge: build the evaluation set, then score frozen detectors on it.
+python -m scripts.build_external_manifest
+python main.py --config configs/external_challenge_v1.yaml
+python -m scripts.build_external_figures
+
+# 8. One machine-readable table covering every reported cell, internal and external.
+python -m scripts.build_final_results_summary
+```
+
+Steps 7 and 8 train nothing. Step 7's evaluation is inference on 200 images against
+already-saved checkpoints.
+
 `configs/tiny_ablation_vqdm.yaml` carries the per-depth learning rates over from
 `configs/tiny_ablation_biggan.yaml` unchanged rather than re-probing them on vqdm; the
 file explains why, and Chapter 4 must state that learning rate is not constant across
@@ -312,6 +329,98 @@ then carries an `is_synthetic_smoke` column.
 `standard_deviation` is `0.0` and `standard_error` is `undefined`, because the spread was
 *not measured* rather than measured to be zero — and `plot_fine_tuning_recovery` draws a
 band only where at least three runs exist.
+
+## External contemporary-generator challenge
+
+Every Chapter 4 result measures generalisation to a generator **held out of one benchmark,
+assembled at one time, from one source**. It does not measure how the detector behaves
+against a generator that did not exist when the benchmark was built. This study is the one
+measurement from outside the benchmark, and it is kept rigidly apart from the internal
+tables.
+
+It is **evaluation only**. `experiment.type: external_challenge` has no optimiser, no loss,
+no checkpoint writing and no threshold search. The internal Chapter 4 context in
+`src/evaluation/dissertation.py` deliberately does not discover `external_challenge` runs,
+so no internal table can pick these numbers up by accident.
+
+### The route, and what it forbids
+
+The images were produced through an assistant-mediated hosted image-generation tool
+(`image_gen.imagegen`) — **Route B** of the pre-registered design in section 15 of
+`outputs/report/dissertation_results/RESULTS_NOTES.md`. That tool selects its own
+underlying image model and does not report which, so the generator is recorded as
+`astra_mediated_unidentified` and **no result from this study may be attributed to a named
+architecture**. Route A (direct Images API with a pinned model id) remains the recommended
+design and was unreachable here: no SDK, no credential.
+
+`data/external/README.md` records the provenance, the verified per-image facts, the
+exclusions (none) and the limitations in full.
+
+### How the evaluation set is built
+
+`python -m scripts.build_external_manifest` does four things and refuses to continue if any
+of them fails:
+
+1. **Validates every generated file.** Decodable, digest matching the record written at
+   generation time, mutually distinct, and carrying a provenance row. A file failing any of
+   these is *excluded and reported*, never repaired.
+2. **Proves it is not internal data arriving by another route.** Exact digests against the
+   preprocessing index, and a 64-bit difference-hash sweep across **all 34,999** internal
+   images. A byte-identical match or a Hamming distance at or below 4 aborts the build.
+3. **Preprocesses through the identical pinned policy.** Both classes end as 256x256 RGB
+   JPEG q95 with metadata stripped, so container format and spatial size cannot predict
+   the label on the evaluated images.
+4. **Selects authentic comparators by protocol, not by eye.** The first *n* entries of the
+   **same** `REAL_TEST_POOL_SEED` ordering `build_balanced_final_test` uses, making them a
+   nested subset of the fixed real pool the internal unseen tests already score against.
+   External and internal numbers then share their negatives and differ only in their
+   positives.
+
+The result is `data/manifests/external_challenge_v1.csv` plus
+`external_challenge_v1.audit.json`, which records counts, class balance, the sample-size
+tier reached *and not reached*, exclusions, every check performed, and the final evaluation
+composition. Neither file is overwritten by a re-run.
+
+### How the evaluation runs
+
+`configs/external_challenge_v1.yaml` nominates the frozen detectors **before** the
+evaluation, including which one is primary, so the headline cannot be a post-hoc pick of
+whichever checkpoint scored best. All nominated detectors are reported. The runner
+re-verifies the manifest digest against the audit, refuses a set whose leakage checks did
+not pass, hashes every checkpoint against the digest its own run recorded, and builds each
+detector from the architecture stored in its own checkpoint (which is how the cosine and
+linear heads are both scored correctly).
+
+Metrics are reported at the project-wide 0.5 threshold and, additionally, at whatever
+threshold each detector's own run selected on *its* development validation data. Both were
+fixed before any external image existed. No threshold is selected here.
+
+Only frozen, zero-shot detectors can be scored: the recovery and depth-ablation cells
+retained checkpoint *digests*, not weights, so step 7 of the protocol — limited-data
+recovery against the external set — is out of reach without re-training and is recorded as
+not done rather than approximated.
+
+### Checking it
+
+`scripts.verify_corrections` gained check 9, which re-derives from the files on disk that
+the external set is balanced, single-format, single-size, has no fake-side sample-id or
+path overlap with the internal manifest, draws its comparators only from the held-out test
+split, passed its build-time leakage checks, and asserts no development use. It is skipped
+when the external manifest is absent, so the gate still runs on a fresh clone.
+
+## The consolidated results summary
+
+`python -m scripts.build_final_results_summary` writes
+`outputs/report/final_results/`: one flat, machine-readable table covering every reported
+cell — baseline, leave-one-generator-out, recovery budgets, depth ablation and the external
+challenge — so a Results table can be built without walking individual run directories.
+
+Every value is copied from a completed run's own saved metrics file. Filter
+`row_role == "primary"` for the citable rows; `reproduction` rows are the cells a second
+run scored and agreed on, kept so the agreement is visible without being counted twice.
+Filter `threshold_role == "default"` for the canonical 0.5-threshold table. Do not merge
+`dataset == "external_challenge_v1_astra_mediated"` rows with the internal ones.
+`outputs/report/final_results/README.md` documents every column and role.
 
 ## Reproducibility and common failure modes
 

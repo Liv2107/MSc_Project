@@ -92,6 +92,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "fine_tuning",
         "ablation",
         "mode_overrides",
+        "external_challenge",
     }
     errors: list[str] = []
     unknown = sorted(set(config).difference(allowed_top))
@@ -195,6 +196,21 @@ def validate_config(config: Mapping[str, Any]) -> None:
             "record_training_time",
         },
         "mode_overrides": {"head_only", "last_block", "full"},
+        # Evaluation-only protocol: a frozen detector scored once on an external set
+        # built outside this benchmark. It has no training or selection keys because
+        # nothing may be fitted, selected, or thresholded on external data.
+        "external_challenge": {
+            "challenge_id",
+            "manifest_path",
+            "audit_path",
+            "split_name",
+            "frozen_checkpoints",
+            "primary_checkpoint_run_id",
+            "generation_route",
+            "generator_identity_known",
+            "adaptation_permitted",
+            "threshold_reselection_permitted",
+        },
     }
     for section_name, allowed in allowed_sections.items():
         section = config.get(section_name)
@@ -256,7 +272,13 @@ def validate_config(config: Mapping[str, Any]) -> None:
     if not isinstance(threshold, (int, float)) or not 0 <= threshold <= 1:
         errors.append("model.decision_threshold must be in [0, 1]")
     experiment_type = experiment.get("type")
-    if experiment_type not in {"baseline", "unseen_generator", "fine_tuning", "ablation"}:
+    if experiment_type not in {
+        "baseline",
+        "unseen_generator",
+        "fine_tuning",
+        "ablation",
+        "external_challenge",
+    }:
         errors.append("experiment.type is invalid")
     for split in ("train", "validation", "test"):
         names = generators.get(split)

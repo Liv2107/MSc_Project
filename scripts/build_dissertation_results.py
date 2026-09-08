@@ -19,10 +19,88 @@ from typing import Any
 
 from src.evaluation import dissertation as D
 
-#: The external-challenge protocol is a *proposal*. Nothing here has been generated or
-#: evaluated, and the manifest records that explicitly so a later reader cannot mistake
-#: the plan for a result.
+#: Status when no external run exists yet. The manifest records it explicitly so a later
+#: reader cannot mistake the plan for a result. Once an external run is present under
+#: ``outputs/`` the manifest reports ``executed`` instead and carries its numbers.
 EXTERNAL_CHALLENGE_STATUS = "proposed_not_executed"
+EXTERNAL_CHALLENGE_STATUS_EXECUTED = "executed"
+
+
+def _executed_external_challenge(output_root: Path | None) -> dict[str, Any] | None:
+    """Return the executed external challenge, or ``None`` while it has not been run.
+
+    Read-only. The internal Chapter 4 context deliberately does not discover
+    ``external_challenge`` runs, so this is the only place the two meet, and it reports
+    the external result beside the plan rather than merging it into any internal table.
+    """
+
+    if output_root is None:
+        return None
+    runs = sorted(
+        path
+        for path in Path(output_root).glob("external_challenge-*")
+        if (path / "external_challenge_metrics.json").is_file()
+    )
+    if not runs:
+        return None
+    run_dir = runs[-1]
+    metrics = json.loads(
+        (run_dir / "external_challenge_metrics.json").read_text(encoding="utf-8")
+    )
+    audit = metrics.get("build_audit", {})
+    primary = next(
+        (item for item in metrics["detectors"] if item.get("is_primary")),
+        metrics["detectors"][0],
+    )
+    return {
+        "run_id": run_dir.name,
+        "run_dir": str(run_dir),
+        "route_used": metrics.get("generation_route"),
+        "route_option": "astra_responses_api_image_generation_tool (Route B)",
+        "generator_recorded_as": metrics.get("generator_recorded_as"),
+        "generator_identity_known": False,
+        "architectural_claim_permitted": False,
+        "evaluation_composition": metrics.get("evaluation_composition"),
+        "sample_size_tier": audit.get("sample_size_tier"),
+        "authentic_comparator_selection": audit.get("authentic_comparator_selection"),
+        "preprocessing_policy_identity": (audit.get("preprocessing") or {}).get(
+            "policy_identity"
+        ),
+        "exclusions": audit.get("exclusions"),
+        "leakage_checks": [
+            {"check": check.get("check"), "passed": check.get("passed")}
+            for check in audit.get("leakage_checks", [])
+        ],
+        "primary_detector": {
+            "run_id": primary["run_id"],
+            "role": primary["role"],
+            "head_type": primary.get("head_type"),
+            "checkpoint_sha256": primary["checkpoint_sha256"],
+            "external_at_default_threshold": primary["external_test"][
+                "at_default_threshold"
+            ],
+            "internal_in_distribution": primary["internal_reference"].get(
+                "in_distribution_test"
+            ),
+            "internal_unseen": primary["internal_reference"].get("unseen_test"),
+        },
+        "all_detectors": [
+            {
+                "run_id": item["run_id"],
+                "role": item["role"],
+                "is_primary": item["is_primary"],
+                "roc_auc": item["external_test"]["at_default_threshold"]["roc_auc"],
+                "average_precision": item["external_test"]["at_default_threshold"][
+                    "average_precision"
+                ],
+                "f1": item["external_test"]["at_default_threshold"]["f1"],
+            }
+            for item in metrics["detectors"]
+        ],
+        "isolation_rules_observed": metrics.get("isolation_rules_observed"),
+        "not_done": metrics.get("not_done"),
+        "exports": "outputs/report/external_challenge/",
+    }
 
 
 def _write_csv(rows: Sequence[Mapping[str, Any]], destination: Path, name: str) -> Path:
@@ -54,10 +132,14 @@ def external_challenge_manifest(ctx: D.Context) -> dict[str, Any]:
     """
 
     provenance = ctx.output_root and D.dataset_provenance(ctx)
+    executed = _executed_external_challenge(ctx.output_root)
     return {
         "challenge_id": "contemporary_openai_astra_mediated_v1",
         "title": "Contemporary OpenAI/Astra-mediated image-generation challenge",
-        "status": EXTERNAL_CHALLENGE_STATUS,
+        "status": (
+            EXTERNAL_CHALLENGE_STATUS_EXECUTED if executed else EXTERNAL_CHALLENGE_STATUS
+        ),
+        "executed": executed,
         "naming_rationale": (
             "GPT-6 Astra is documented as a text-output model that invokes a hosted "
             "image_generation tool; it is not itself an image-generation architecture. "
@@ -147,12 +229,16 @@ def external_challenge_manifest(ctx: D.Context) -> dict[str, Any]:
             "sample_count": (provenance or {}).get("sample_count"),
             "note": "the external set is deliberately outside this benchmark",
         },
-        "not_yet_done": [
-            "no image has been generated",
-            "no API call has been made",
-            "no credential is configured in this environment",
-            "no external evaluation has been run",
-        ],
+        "not_yet_done": (
+            executed["not_done"]
+            if executed
+            else [
+                "no image has been generated",
+                "no API call has been made",
+                "no credential is configured in this environment",
+                "no external evaluation has been run",
+            ]
+        ),
     }
 
 

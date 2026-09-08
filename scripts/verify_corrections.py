@@ -8,6 +8,8 @@ before committing expensive compute. Each check corresponds to a numbered requir
 6. the unseen test set is class balanced for every held-out generator
 7. the unseen test membership is identical across every adaptation budget
 8. every adaptation budget reloads the original starting checkpoint
+9. the external challenge set is balanced, format-neutral, and disjoint from every
+   internal split (skipped until the external manifest has been built)
 
 Usage:
     python -m scripts.verify_corrections --manifest data/manifests/tiny_genimage.csv \
@@ -286,6 +288,111 @@ def check_configs_against_manifest(
     }
 
 
+def check_external_challenge_set(
+    internal_rows: Sequence[dict[str, Any]],
+    data_root: Path,
+    splits_path: Path,
+    external_manifest: Path,
+    external_audit: Path,
+) -> dict[str, Any]:
+    """The external evaluation set must be balanced, format-neutral, and fully external.
+
+    This is step 5 of the pre-registered external protocol. It is deliberately separate
+    from the internal checks: an external image that turned out to be an internal image,
+    or an external set whose container format tracked the class, would make the external
+    number measure something other than generator novelty.
+    """
+
+    name = "external_challenge_set_balanced_format_neutral_and_disjoint"
+    if not external_manifest.is_file():
+        return {"check": name, "skipped": f"no external manifest at {external_manifest}"}
+    rows = _read_manifest(external_manifest)
+    fakes = [row for row in rows if int(row["label"]) == 1]
+    reals = [row for row in rows if int(row["label"]) == 0]
+    balanced = bool(fakes) and len(fakes) == len(reals)
+
+    formats: dict[int, collections.Counter[str]] = {
+        0: collections.Counter(),
+        1: collections.Counter(),
+    }
+    sizes: collections.Counter[str] = collections.Counter()
+    for row in rows:
+        path = data_root / row["image_path"]
+        with Image.open(path) as image:
+            formats[int(row["label"])][str(image.format)] += 1
+            sizes[f"{image.size[0]}x{image.size[1]}"] += 1
+    real_formats, fake_formats = set(formats[0]), set(formats[1])
+    format_predictive = bool(
+        real_formats and fake_formats and not (real_formats & fake_formats)
+    )
+
+    split_by_id = {item.sample_id: item.split for item in load_split_assignments(splits_path)}
+    internal_ids = {str(row["sample_id"]) for row in internal_rows}
+    fake_ids = {str(row["sample_id"]) for row in fakes}
+    fake_id_overlap = sorted(fake_ids & internal_ids)
+    fake_paths = {str(row["image_path"]) for row in fakes}
+    internal_paths = {str(row["image_path"]) for row in internal_rows}
+    fake_path_overlap = sorted(fake_paths & internal_paths)
+
+    # The authentic comparators are internal images by design: the protocol draws them
+    # from the held-out real pool. What must hold is that every one of them sits in the
+    # test split, so the detectors never trained on any of them.
+    comparator_splits = collections.Counter(
+        split_by_id.get(str(row["sample_id"]), "not_in_internal_manifest") for row in reals
+    )
+    comparators_all_held_out = set(comparator_splits) == {"test"}
+
+    audit_checks: list[dict[str, Any]] = []
+    audit_flags: dict[str, Any] = {}
+    if external_audit.is_file():
+        audit = json.loads(external_audit.read_text(encoding="utf-8"))
+        audit_checks = list(audit.get("leakage_checks", []))
+        audit_flags = {
+            key: audit.get(key)
+            for key in (
+                "used_for_training",
+                "used_for_validation",
+                "used_for_threshold_selection",
+                "generator_identity_known",
+            )
+        }
+    audit_passed = all(bool(item.get("passed")) for item in audit_checks) if audit_checks else False
+    never_developed = all(
+        audit_flags.get(key) is False
+        for key in ("used_for_training", "used_for_validation", "used_for_threshold_selection")
+    )
+
+    return {
+        "check": name,
+        "external_manifest": str(external_manifest),
+        "total": len(rows),
+        "external_fakes": len(fakes),
+        "authentic_comparators": len(reals),
+        "balanced": balanced,
+        "real_formats": dict(formats[0]),
+        "fake_formats": dict(formats[1]),
+        "format_is_predictive": format_predictive,
+        "observed_sizes": dict(sizes),
+        "single_spatial_size": len(sizes) == 1,
+        "external_fake_sample_id_overlap_with_internal": fake_id_overlap[:10],
+        "external_fake_image_path_overlap_with_internal": fake_path_overlap[:10],
+        "comparator_internal_splits": dict(comparator_splits),
+        "comparators_all_from_held_out_test_split": comparators_all_held_out,
+        "build_audit_leakage_checks_passed": audit_passed,
+        "build_audit_development_use_flags": audit_flags,
+        "passed": bool(
+            balanced
+            and not format_predictive
+            and len(sizes) == 1
+            and not fake_id_overlap
+            and not fake_path_overlap
+            and comparators_all_held_out
+            and audit_passed
+            and never_developed
+        ),
+    }
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=Path("data/manifests/tiny_genimage.csv"))
@@ -312,6 +419,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Completed fine_tuning run directory for checks 7 and 8.",
     )
+    parser.add_argument(
+        "--external-manifest",
+        type=Path,
+        default=Path("data/manifests/external_challenge_v1.csv"),
+        help="External challenge manifest for check 9; skipped when absent.",
+    )
+    parser.add_argument(
+        "--external-audit",
+        type=Path,
+        default=Path("data/manifests/external_challenge_v1.audit.json"),
+        help="Audit record written when the external manifest was built.",
+    )
     return parser.parse_args(argv)
 
 
@@ -327,6 +446,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.recovery_run is not None:
         results.append(check_test_membership_stable_across_budgets(args.recovery_run))
         results.append(check_budgets_reload_starting_checkpoint(args.recovery_run))
+    results.append(
+        check_external_challenge_set(
+            rows,
+            args.data_root,
+            args.splits,
+            args.external_manifest,
+            args.external_audit,
+        )
+    )
 
     print(json.dumps(results, indent=2, sort_keys=True, default=str))
     failed = [item["check"] for item in results if item.get("passed") is False]

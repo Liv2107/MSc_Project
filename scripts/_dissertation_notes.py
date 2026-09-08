@@ -713,20 +713,116 @@ def _chapter_mapping(ctx: D.Context) -> str:
             "`limitations.csv` |",
             "| 5.4 Internal benchmark vs external generalisation | the boundary of the "
             "claim | `limitations.csv` |",
-            "| 5.5 Contemporary external-generator challenge | proposed protocol | "
-            "`external_challenge_manifest.json`, notebook 02 |",
+            "| 5.5 Contemporary external-generator challenge | executed, Route B, "
+            "n=200 | `external_challenge_manifest.json`, "
+            "`outputs/report/external_challenge/`, notebook 02 |",
             "",
         ]
     )
 
 
+def _external_run(ctx: D.Context) -> dict[str, Any] | None:
+    """The executed external challenge, if one exists under the output root."""
+
+    from scripts.build_dissertation_results import _executed_external_challenge
+
+    return _executed_external_challenge(ctx.output_root)
+
+
+def _external_status_block(ctx: D.Context) -> list[str]:
+    """State plainly whether the external challenge has been run, and on what."""
+
+    run = _external_run(ctx)
+    if run is None:
+        return ["**Status: proposed. Nothing has been generated, called, or evaluated.**", ""]
+    composition = run["evaluation_composition"]
+    tier = run["sample_size_tier"]
+    primary = run["primary_detector"]
+    external = primary["external_at_default_threshold"]
+    unseen = primary.get("internal_unseen") or {}
+    in_distribution = primary.get("internal_in_distribution") or {}
+    return [
+        f"**Status: EXECUTED via Route B. Run `{run['run_id']}`.**",
+        "",
+        "### 15.0 What was actually run",
+        "",
+        f"- **Route used: Route B**, the non-recommended option "
+        f"(`{run['route_option']}`). Route A was unavailable: this environment has no "
+        "OpenAI SDK and no credential. The generator is therefore recorded as "
+        f"`{run['generator_recorded_as']}` and **no architectural claim may be attached "
+        "to any external number**.",
+        f"- **Evaluation set:** {composition['total']} images, "
+        f"{composition['external_fake']} generated + "
+        f"{composition['authentic_comparator']} authentic, prevalence "
+        f"{composition['positive_prevalence']:.2f}. That is the "
+        f"*{tier['tiers_reached'][-1]}* tier; the recommended 250-per-class tier was "
+        "**not** reached, so the external result is directional and its confidence "
+        "interval is materially wider than any internal number.",
+        "- **Authentic comparators** are the first 100 entries of the same seeded "
+        "ordering the internal unseen tests use, so they are a nested subset of the "
+        "fixed 250-image real pool. External and internal numbers share their "
+        "negatives and differ only in their positives.",
+        f"- **Preprocessing** is the identical pinned policy "
+        f"(`policy_identity {run['preprocessing_policy_identity']}`): every evaluated "
+        "image is a 256x256 RGB JPEG q95 with metadata stripped, so container format "
+        "cannot predict the class.",
+        f"- **Exclusions:** {len(run['exclusions'] or [])}. All 100 generated files "
+        "decoded, matched the digest recorded at generation time, and were mutually "
+        "distinct.",
+        "- **Leakage:** "
+        + "; ".join(
+            f"{item['check']}={'pass' if item['passed'] else 'FAIL'}"
+            for item in run["leakage_checks"]
+        )
+        + ". Every internal image was compared by exact digest and by 64-bit "
+        "difference hash; the closest external-to-internal pair sat at Hamming 5 and "
+        "was inspected by eye (a swimsuit against a bookcase), i.e. coincidence of "
+        "gross structure, not a duplicate.",
+        "",
+        "#### 15.0.1 Result, and the honest reading of it",
+        "",
+        f"The primary frozen detector (`{primary['role']}`, head "
+        f"{primary['head_type']}) scores **ROC-AUC {external['roc_auc']:.4f}, PR-AUC "
+        f"{external['average_precision']:.4f}, F1 {external['f1']:.4f}** on the "
+        "external set at the fixed 0.5 threshold. Its own internal numbers are "
+        f"ROC-AUC {in_distribution.get('roc_auc', float('nan')):.4f} in-distribution "
+        f"and {unseen.get('roc_auc', float('nan')):.4f} on unseen VQDM.",
+        "",
+        "So the external set is **not** harder than the held-out internal generator: "
+        "it is roughly as easy as in-distribution data. Three readings are available "
+        "and only the first is supported:",
+        "",
+        "1. **Supported.** Degradation on an unseen generator is generator-specific, "
+        "not a function of how recent or how capable the generator is. VQDM, a 2023 "
+        "discrete-diffusion model inside the benchmark, defeats this detector far more "
+        "thoroughly than a 2026 assistant-mediated image tool does.",
+        "2. **Not supported.** 'The detector generalises to contemporary generators.' "
+        "The generator is unidentifiable, n is 100 per class, and it is one prompt "
+        "distribution.",
+        "3. **Not supported, and the main threat to reading 1.** The external fakes "
+        "may be separable on grounds other than generator artefacts. They were "
+        "generated at 1254x1254 and downscaled to 256, a far larger reduction than any "
+        "internal image undergoes, and the prompt set produces a clean-background "
+        "product-photograph aesthetic that the ImageNet-derived authentic pool does "
+        "not share. The pre-registered mitigation (ImageNet class vocabulary, identical "
+        "preprocessing) addresses subject matter and container format but **not** "
+        "native-resolution high-frequency content or photographic style. This must be "
+        "stated wherever the external number appears.",
+        "",
+        f"Not done: {'; '.join(run['not_done'])}.",
+        "",
+        f"Artefacts: `{run['run_dir']}/external_challenge_metrics.json`, "
+        f"`{run['exports']}`.",
+        "",
+    ]
+
+
 def _external_section(ctx: D.Context) -> str:
     return "\n".join(
         [
-            "## 15. Proposed contemporary-generator challenge section",
+            "## 15. Contemporary-generator challenge section",
             "",
-            "**Status: proposed. Nothing has been generated, called, or evaluated.**",
-            "",
+            *_external_status_block(ctx),
             "### 15.1 What was checked before designing it",
             "",
             "**Fact.** Public documentation for GPT-6 Astra (model id `gpt-6-astra`,",
@@ -819,21 +915,41 @@ def _external_section(ctx: D.Context) -> str:
             "  Record refusals; do not silently resample, or the prompt distribution",
             "  becomes conditioned on the generator's behaviour.",
             "",
-            "### 15.5 Exact implementation steps",
+            "### 15.5 Exact implementation steps, and what each one actually became",
             "",
-            "1. Add `openai` to `requirements.txt`; configure a credential outside the",
-            "   repository.",
-            "2. Write `configs/external_challenge_v1.yaml` recording route, model id,",
-            "   size, quality, format, prompt-set id and the frozen checkpoint sha256.",
-            "3. Write `scripts/generate_external_challenge.py` — generation and hashing",
-            "   only, writing images plus one provenance record per image. No evaluation.",
-            "4. Write `scripts/build_external_manifest.py` — assemble the dataset manifest",
-            "   in the existing schema so the standard evaluator can read it.",
-            "5. Extend `scripts/verify_corrections.py` with an external-set check:",
-            "   balance, format non-predictiveness, no overlap with any internal split.",
-            "6. Evaluate the frozen detector with the existing evaluator, writing to a",
-            "   separate run directory and a separate export directory.",
-            "7. Report in Chapter 5 only, with the naming decision from 15.1 applied.",
+            "| Step | Planned | Outcome |",
+            "|---|---|---|",
+            "| 1 | add `openai`, configure a credential | **not done, and not needed.** "
+            "Route A was never reachable from here. Route B produced the images through "
+            "the assistant's own hosted tool, with no SDK or credential in this repo |",
+            "| 2 | `configs/external_challenge_v1.yaml` | **done.** Records the route, "
+            "the unavailability of a model id, the split name, the nominated primary "
+            "detector and its pinned checkpoint sha256 |",
+            "| 3 | `scripts/generate_external_challenge.py` | **deviated.** Generation "
+            "happened outside the repository through the assistant tool, which wrote its "
+            "own provenance CSV (`data/external/codex_generated/manifest.csv`: prompt id, "
+            "exact prompt, timestamp, route, model id, dimensions, sha256). No generation "
+            "script exists, so the external set is *not* regenerable from this repo. The "
+            "images and their digests are the reproducibility record |",
+            "| 4 | `scripts/build_external_manifest.py` | **done.** Validates every file, "
+            "preprocesses through the pinned policy, selects the authentic comparators by "
+            "seed, and writes `data/manifests/external_challenge_v1.csv` plus its audit |",
+            "| 5 | external check in `scripts/verify_corrections.py` | **done.** Check 9: "
+            "balance, single container format, single spatial size, no fake-side id or "
+            "path overlap, comparators all from the held-out test split, build-audit "
+            "leakage checks passed, development-use flags all false |",
+            "| 6 | evaluate the frozen detector, separate directories | **done.** "
+            "`src/experiments/external_challenge.py`, run dir "
+            "`outputs/external_challenge-*`, exports "
+            "`outputs/report/external_challenge/` |",
+            "| 7 | report in Chapter 5 only | **for the write-up.** The internal "
+            "Chapter 4 context does not discover `external_challenge` runs, so no "
+            "internal table can pick the external numbers up by accident |",
+            "",
+            "Step 4 of the *protocol* (15.2) asked for comparators matched on resolution. "
+            "That match is achieved only after preprocessing: native resolutions differ "
+            "(1254px generated against roughly 500x375 authentic) and only the 256x256 "
+            "cached output is identical. Section 15.0.1 reading 3 is the consequence.",
             "",
         ]
     )
@@ -1116,9 +1232,9 @@ def _novelty_audit(ctx: D.Context) -> str:
             "is that even 769 parameters recover a large fraction |",
             "| External post-development contemporary-generator challenge | "
             "**potentially novel / requires literature verification** | the design is "
-            "sound and the provenance discipline is unusual, but nothing has been run, so "
-            "there is currently no result at all. Novelty cannot be assessed without a "
-            "literature search |",
+            "sound and the provenance discipline is unusual, and it has now been run at "
+            "the minimum-reportable tier (100 per class) with an unattributable "
+            "generator. Novelty cannot be assessed without a literature search |",
             "| Practical recommendation for detector maintenance | **potentially novel / "
             "requires literature verification** | the specific recommendation (spend "
             "labelling effort early, spend it on depth rather than volume) follows from "
@@ -1128,8 +1244,12 @@ def _novelty_audit(ctx: D.Context) -> str:
             "trainable-parameter counts are not attribution |",
             "| Any claim of statistical significance | **unsupported / do not claim** | "
             "one subset seed, one training seed, no variance estimate |",
-            "| Any claim of external generalisation | **unsupported / do not claim** | "
-            "no image outside the Tiny GenImage subset has been evaluated |",
+            "| A *named*-generator external generalisation claim | **unsupported / do "
+            "not claim** | the mediation route does not report which image model "
+            "produced each file, so no result can be attributed to an architecture |",
+            "| A quantitative external generalisation claim | **directional only** | "
+            "200 images, one prompt distribution, one session; the native-resolution "
+            "and photographic-style confounds in section 15.0.1 are not controlled |",
             "",
             "**Before any 'novel' wording enters the dissertation**, the two entries",
             "marked *requires literature verification* need a targeted search: prior work",
