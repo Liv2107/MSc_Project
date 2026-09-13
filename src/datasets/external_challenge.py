@@ -1,29 +1,4 @@
-"""Assemble the external contemporary-generator challenge set from generated images.
-
-This implements the protocol already written down in
-``scripts/build_dissertation_results.py::external_challenge_manifest`` and section 15 of
-``outputs/report/dissertation_results/RESULTS_NOTES.md``. Nothing here is a new
-experimental design; it is the mechanical realisation of that pre-registered plan.
-
-The route actually used is **Route B**: the images were produced by an assistant-mediated
-hosted image-generation tool (Codex ``image_gen.imagegen``), which selects an underlying
-GPT Image model and does not report which. The generator is therefore recorded as
-``astra_mediated_unidentified`` and no architectural claim may be attached to the result.
-The provenance CSV shipped with the images is carried through verbatim.
-
-Three properties matter and are enforced here rather than assumed:
-
-* **The external images never enter development.** This module only ever builds an
-  evaluation manifest. It writes no split file and touches no training selection.
-* **Authentic comparators are chosen by protocol, not by eye.** They are the first 100
-  entries of the *identical* seeded ordering of held-out real test images that
-  ``src.experiments.unseen_generator.build_balanced_final_test`` uses, so they are a
-  nested subset of the fixed real pool the internal unseen tests already score against.
-  The external and internal numbers then differ only in their positives.
-* **Format cannot predict the class.** Both halves pass through the same pinned
-  ``PreprocessingPolicy`` as the internal benchmark, so every evaluated image is a
-  256x256 RGB JPEG at quality 95 with metadata stripped.
-"""
+"""Assemble the external contemporary-generator challenge set from generated images."""
 
 from __future__ import annotations
 
@@ -46,27 +21,19 @@ from src.datasets.preprocessing import (
 from src.datasets.splitting import load_split_assignments
 from src.experiments.unseen_generator import REAL_TEST_POOL_SEED
 
-#: The challenge identifier fixed by the pre-registered manifest.
 CHALLENGE_ID = "contemporary_openai_astra_mediated_v1"
 
-#: Route B was used. The underlying image model is not reported by the tool, so the
-#: generator is named for the mediation route and explicitly marked unidentified.
 EXTERNAL_GENERATOR_NAME = "astra_mediated_unidentified"
 EXTERNAL_ROUTE = "astra_mediated_hosted_image_generation_tool"
 EXTERNAL_ROUTE_TOOL = "image_gen.imagegen (built-in Codex tool)"
 
-#: Provenance of the evaluation set, mirroring the internal ``dataset_source`` style.
 EXTERNAL_DATASET_SOURCE = (
     "external_challenge_contemporary_openai_astra_mediated_v1"
     "_codex_image_gen_imagegen_route_b"
 )
 
-#: Evaluation-only split name. Deliberately not one of train/validation/test so it can
-#: never be mistaken for, or merged with, an internal partition.
 EXTERNAL_SPLIT_NAME = "external_test"
 
-#: Columns of the emitted manifest: the canonical six the loader requires, then
-#: provenance the dissertation has to be able to cite.
 MANIFEST_COLUMNS = (
     "sample_id",
     "image_path",
@@ -99,12 +66,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _difference_hash(path: Path, *, side: int = 8) -> str:
-    """A 64-bit difference hash, used only to look for near-duplicate images.
-
-    Exact digests catch a byte-identical file; this catches the more realistic leakage
-    shape, where a generated image is a re-encoding or rescale of a dataset image.
-    """
-
+    """A 64-bit difference hash, used only to look for near-duplicate images."""
     with Image.open(path) as handle:
         grey = handle.convert("L").resize((side + 1, side), Image.Resampling.BICUBIC)
     pixels = grey.tobytes()
@@ -126,7 +88,6 @@ def _hamming(left: str, right: str) -> int:
 @dataclass(frozen=True, slots=True)
 class GeneratedImage:
     """One generated external image with the provenance recorded at generation time."""
-
     prompt_id: str
     filename: str
     path: Path
@@ -150,7 +111,6 @@ class ExternalChallengeBuild:
 
 def read_generation_provenance(provenance_csv: Path) -> dict[str, dict[str, str]]:
     """Read the provenance CSV written when the images were generated."""
-
     with provenance_csv.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     if not rows:
@@ -169,13 +129,7 @@ def read_generation_provenance(provenance_csv: Path) -> dict[str, dict[str, str]
 def inspect_generated_images(
     image_dir: Path, provenance: Mapping[str, Mapping[str, str]]
 ) -> tuple[list[GeneratedImage], list[dict[str, Any]]]:
-    """Validate every generated file, returning the usable ones and the exclusions.
-
-    An image is excluded, never silently repaired, when it cannot be decoded, when its
-    bytes disagree with the digest recorded at generation time, when no provenance row
-    exists for it, or when it duplicates the bytes of an image already accepted.
-    """
-
+    """Validate every generated file, returning the usable ones and the exclusions."""
     usable: list[GeneratedImage] = []
     excluded: list[dict[str, Any]] = []
     seen_digests: dict[str, str] = {}
@@ -218,7 +172,7 @@ def inspect_generated_images(
                 size = handle.size
                 mode = str(handle.mode)
                 image_format = str(handle.format)
-        except Exception as exc:  # a corrupt file is reported, not repaired
+        except Exception as exc:
             excluded.append(
                 {"filename": path.name, "reason": f"unreadable: {type(exc).__name__}: {exc}"}
             )
@@ -257,16 +211,7 @@ def select_authentic_comparators(
     *,
     count: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Take ``count`` authentic comparators from the held-out real test pool.
-
-    The ordering is the one ``build_balanced_final_test`` uses -- a shuffle of the sorted
-    real test IDs seeded with ``REAL_TEST_POOL_SEED`` -- and the first ``count`` entries
-    are taken. The comparators are therefore a nested subset of the fixed 250-image real
-    pool the internal unseen tests already score against, so the external and internal
-    results share their negatives and differ only in their positives. The detector never
-    trained on any of them: they sit in the ``test`` split.
-    """
-
+    """Take ``count`` authentic comparators from the held-out real test pool."""
     if count <= 0:
         raise ValueError("comparator count must be positive")
     pool = sorted(
@@ -310,15 +255,7 @@ def check_no_overlap_with_internal(
     near_duplicate_scan: str = "all",
     near_duplicate_threshold: int = 4,
 ) -> dict[str, Any]:
-    """Prove the generated images are not internal images arriving by another route.
-
-    Three independent checks: byte-identity against the digests recorded when the
-    internal cache was built, byte-identity of the generated files against the internal
-    files on disk, and a near-duplicate sweep on 64-bit difference hashes over whatever
-    internal rows the caller supplies. ``near_duplicate_scan`` records the scope the
-    caller chose and switches the sweep off entirely when set to ``none``.
-    """
-
+    """Prove the generated images are not internal images arriving by another route."""
     if near_duplicate_scan not in {"all", "test", "none"}:
         raise ValueError("near_duplicate_scan must be all, test or none")
     generated_digests = {item.sha256: item.filename for item in generated}
@@ -403,7 +340,6 @@ def build_external_challenge(
     near_duplicate_scan: str = "all",
 ) -> ExternalChallengeBuild:
     """Build the class-balanced external evaluation manifest and its audit record."""
-
     policy = policy or PreprocessingPolicy()
     data_root = data_root.resolve()
     provenance = read_generation_provenance(provenance_csv)
@@ -439,8 +375,6 @@ def build_external_challenge(
             f"{overlap['byte_identical_matches'] or overlap['near_duplicates_flagged']}"
         )
 
-    # Preprocess through the identical pinned policy, so container format and spatial
-    # size cannot separate the external fakes from the authentic comparators.
     raw_rows = [
         {
             "sample_id": f"astra_{item.prompt_id}",
@@ -575,7 +509,6 @@ def build_external_challenge(
 
 def _sample_size_tier(images_per_class: int) -> dict[str, Any]:
     """Report which pre-registered sample-size tier this set reaches, and which it misses."""
-
     tiers = [
         (50, "pilot / provenance smoke test"),
         (100, "minimum reportable"),
@@ -605,7 +538,6 @@ def _describe_composition(
     rows: Sequence[Mapping[str, Any]], data_root: Path
 ) -> dict[str, Any]:
     """Record, per class, the container format and size of every evaluated image."""
-
     per_class: dict[str, dict[str, dict[str, int]]] = {}
     for row in rows:
         key = "fake" if int(row["label"]) == 1 else "real"
@@ -640,7 +572,6 @@ def write_external_challenge(
     build: ExternalChallengeBuild, *, manifest_path: Path, audit_path: Path
 ) -> None:
     """Write the manifest CSV and its audit JSON, refusing to clobber either."""
-
     for path in (manifest_path, audit_path):
         if path.exists():
             raise FileExistsError(f"refusing to overwrite an existing artefact: {path}")

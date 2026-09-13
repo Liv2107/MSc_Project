@@ -1,27 +1,4 @@
-"""Score frozen detectors, once, on the external contemporary-generator challenge set.
-
-This is step 6 of the pre-registered protocol in section 15 of ``RESULTS_NOTES.md``:
-evaluate the frozen detector on the external set and report separately. It is
-inference-only by construction. There is no optimiser, no loss, no checkpoint writing
-and no threshold search anywhere in this module, so an external image cannot influence
-any model, any operating point, or any internal result.
-
-Three guarantees are asserted at runtime rather than trusted:
-
-* **The set is the audited one.** The manifest digest recorded in the build audit must
-  still match the manifest on disk, and every leakage check in that audit must have
-  passed, or the run refuses to start.
-* **The checkpoints are the reported ones.** Each nominated checkpoint is hashed and
-  compared against the digest its own run recorded. A config that pins a digest must
-  match it too.
-* **No operating point is chosen here.** Metrics are reported at the project-wide default
-  threshold and, additionally, at whatever threshold the checkpoint's own run selected on
-  *its* development validation data. Both were fixed before any external image existed.
-
-Each detector is also reported alongside the internal reference numbers already saved in
-its own run directory, read read-only, so the external drop is read against a number this
-project already published rather than a re-derived one.
-"""
+"""Score frozen detectors, once, on the external contemporary-generator challenge set."""
 
 from __future__ import annotations
 
@@ -65,7 +42,6 @@ def _sha256_file(path: Path) -> str:
 
 def validate_external_protocol(config: Mapping[str, Any]) -> Mapping[str, Any]:
     """Confirm the config describes an evaluation-only external challenge."""
-
     section = config.get("external_challenge")
     if not isinstance(section, Mapping):
         raise ValueError("experiment.type=external_challenge requires an external_challenge block")
@@ -100,7 +76,6 @@ def validate_external_protocol(config: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def verify_audited_manifest(manifest_path: Path, audit_path: Path) -> dict[str, Any]:
     """Refuse to evaluate a manifest that is not the audited, leakage-checked one."""
-
     if not manifest_path.is_file():
         raise FileNotFoundError(
             f"external manifest not found: {manifest_path}. Build it first with "
@@ -160,12 +135,7 @@ def load_external_records(
 
 
 def _internal_reference(run_dir: Path) -> dict[str, Any]:
-    """Read the internal numbers this checkpoint's own run already published.
-
-    Read-only. Nothing internal is recomputed, so the external result is compared with
-    the exact figures the internal chapters report.
-    """
-
+    """Read the internal numbers this checkpoint's own run already published."""
     unseen_metrics = run_dir / "unseen_generator_metrics.json"
     if unseen_metrics.is_file():
         payload = json.loads(unseen_metrics.read_text(encoding="utf-8"))
@@ -200,7 +170,6 @@ def _internal_reference(run_dir: Path) -> dict[str, Any]:
 
 def _resolve_checkpoint(entry: Mapping[str, Any], output_root: Path) -> dict[str, Any]:
     """Locate one nominated checkpoint and confirm it is the artefact its run recorded."""
-
     run_id = str(entry["run_id"])
     run_dir = (output_root / run_id).resolve()
     if not run_dir.is_dir():
@@ -252,14 +221,7 @@ def _resolve_checkpoint(entry: Mapping[str, Any], output_root: Path) -> dict[str
 def _config_for_checkpoint(
     config: Mapping[str, Any], checkpoint: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Rebuild the model section from the checkpoint's own resolved config.
-
-    A checkpoint carries the architecture it was trained with -- notably ``head_type``,
-    which differs between the linear and cosine variants -- so the detector is
-    constructed from the checkpoint's record rather than from this config's defaults.
-    The decision threshold stays the project-wide default from this config.
-    """
-
+    """Rebuild the model section from the checkpoint's own resolved config."""
     saved = checkpoint.get("resolved_config")
     if not isinstance(saved, Mapping) or "model" not in saved:
         raise ValueError("checkpoint does not carry the resolved config it was trained under")
@@ -273,7 +235,6 @@ def _config_for_checkpoint(
 
 def run_external_challenge(config_path: Path) -> Path:
     """Evaluate every nominated frozen detector once on the external challenge set."""
-
     loaded = load_config(config_path)
     if loaded.values["experiment"]["type"] != "external_challenge":
         raise ValueError("run_external_challenge requires experiment.type=external_challenge")

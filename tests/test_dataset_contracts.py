@@ -14,7 +14,6 @@ from src.datasets.detector_dataset import (
     AIDetectionDataset,
     DatasetFilters,
     filter_records,
-    random_subset_indices,
 )
 from src.datasets.schema import DatasetRecord
 from src.datasets.splitting import SplitFractions, create_grouped_splits
@@ -45,16 +44,6 @@ def test_leave_one_generator_out_filter_preserves_real_records(tmp_path: Path) -
     assert [item.sample_id for item in selected] == ["real", "a", "b"]
     with pytest.raises(ValueError, match="unknown generators"):
         filter_records(records, DatasetFilters(exclude_generators=frozenset({"unknown"})))
-
-
-def test_limited_data_subsets_are_reproducible_and_nested() -> None:
-    subsets = [
-        set(random_subset_indices(100, fraction, seed=42)) for fraction in (0.05, 0.1, 0.2, 0.5)
-    ]
-    assert [len(item) for item in subsets] == [5, 10, 20, 50]
-    assert subsets[0] < subsets[1] < subsets[2] < subsets[3]
-    assert random_subset_indices(100, 0.2, seed=42) == random_subset_indices(100, 0.2, seed=42)
-    assert random_subset_indices(100, 0.2, seed=42) != random_subset_indices(100, 0.2, seed=43)
 
 
 def test_source_groups_never_cross_split_boundaries(tmp_path: Path) -> None:

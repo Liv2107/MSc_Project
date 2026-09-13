@@ -49,12 +49,7 @@ class EarlyStopping:
         return improved, self.bad_epochs >= self.patience
 
     def state_dict(self) -> dict[str, Any]:
-        """Serialisable counters, so a resumed run does not forget its bad epochs.
-
-        The patience configuration is included so a resume can refuse a checkpoint whose
-        stopping rule no longer matches the config being run.
-        """
-
+        """Serialisable counters, so a resumed run does not forget its bad epochs."""
         return {
             "patience": self.patience,
             "mode": self.mode,

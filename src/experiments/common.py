@@ -95,16 +95,7 @@ class CLIPImageTransform:
 
 
 def _prepare_resumed_run(run_dir: Path, config: Mapping[str, Any]) -> None:
-    """Check that ``run_dir`` is an interrupted run of exactly this configuration.
-
-    Resuming into a directory whose config has drifted would silently splice two
-    different experiments into one audit bundle, so every mismatch is refused. The
-    original ``resolved_config.yaml`` and ``environment.json`` are never rewritten; the
-    environment of each resumed segment is appended to ``resume_events.json`` instead,
-    because a run continued on a different machine or library version must be able to
-    say so.
-    """
-
+    """Check that ``run_dir`` is an interrupted run of exactly this configuration."""
     if not run_dir.is_dir():
         raise FileNotFoundError(f"cannot resume: run directory not found: {run_dir}")
     resolved_path = run_dir / "resolved_config.yaml"
@@ -143,14 +134,7 @@ def _prepare_resumed_run(run_dir: Path, config: Mapping[str, Any]) -> None:
 def prepare_experiment(
     config: Mapping[str, Any], *, resume_run_dir: Path | None = None
 ) -> ExperimentContext:
-    """Seed, create or reopen the run directory, and start run-scoped logging.
-
-    With ``resume_run_dir`` the existing directory is reopened instead of a new one
-    created, so the interrupted run's checkpoints, log, and resolved config stay in one
-    bundle. Everything else -- seeding, device selection, the returned context -- is
-    identical either way.
-    """
-
+    """Seed, create or reopen the run directory, and start run-scoped logging."""
     validate_config(config)
     seed = int(config["reproducibility"]["seed"])
     deterministic = bool(config["reproducibility"].get("deterministic_algorithms", True))
@@ -221,13 +205,7 @@ def build_data_loader(
 
 
 def resolve_runtime_paths(values: Mapping[str, Any], source_path: Path) -> dict[str, Any]:
-    """Make configured paths absolute relative to the repository root.
-
-    Mirrors the baseline runner exactly so every protocol resolves data, output, and
-    checkpoint locations identically. ``source_path`` is the config file, whose parent
-    is ``configs/``; its parent in turn is the documented repository root.
-    """
-
+    """Make configured paths absolute relative to the repository root."""
     resolved = copy.deepcopy(dict(values))
     project_root = source_path.parent.parent
     resolved["project"]["output_root"] = str(
@@ -253,18 +231,11 @@ class ManifestBundle:
 
 def _metadata_only_transform(image: Image.Image) -> Any:
     """Guard proving the manifest load reads metadata and never decodes pixels."""
-
     raise RuntimeError("metadata-only manifest load must not decode images")
 
 
 def load_manifest_with_splits(config: Mapping[str, Any]) -> ManifestBundle:
-    """Load the manifest and persisted splits, auditing identity and group leakage.
-
-    Applies the same two checks the baseline performs before any training: the split
-    file must describe exactly the manifest's samples, and no ``source_group`` may
-    appear in more than one split.
-    """
-
+    """Load the manifest and persisted splits, auditing identity and group leakage."""
     dataset = AIDetectionDataset.from_manifest(
         Path(config["data"]["manifest_path"]),
         data_root=Path(config["data"]["root"]),
@@ -303,7 +274,6 @@ def select_records(
     require_both_classes: bool = True,
 ) -> list[DatasetRecord]:
     """Take one persisted split, keeping only the declared fake generators."""
-
     allowed = set(fake_generators)
     selected = [
         record
@@ -327,7 +297,6 @@ def build_detector(
     config: Mapping[str, Any], *, device: torch.device | str, fine_tune_mode: str | None = None
 ) -> CLIPBinaryDetector:
     """Construct the pinned CLIP detector and apply a freeze policy."""
-
     backbone = CLIPVisionBackbone(
         str(config["model"]["clip_model_name"]),
         revision=config["model"].get("clip_revision"),
@@ -366,12 +335,7 @@ def build_training_stack(
     epochs: int,
     learning_rate: float | None = None,
 ) -> TrainingStack:
-    """Assemble loss, optimiser, schedule, scaler, and early stopping from config.
-
-    A fresh optimiser is always created here so that a freeze policy applied before
-    this call cannot leak momentum state from previously trainable parameters.
-    """
-
+    """Assemble loss, optimiser, schedule, scaler, and early stopping from config."""
     if steps_per_epoch <= 0:
         raise ValueError("steps_per_epoch must be positive")
     training = config["training"]
@@ -419,7 +383,6 @@ def evaluate_records(
     checkpoint_id: str,
 ) -> EvaluationOutcome:
     """Score one fixed record set and compute overall plus per-generator metrics."""
-
     transform = build_transforms(config, training=False)
     dataset = AIDetectionDataset(list(records), transform=transform)
     loader = build_data_loader(dataset, config, training=False)

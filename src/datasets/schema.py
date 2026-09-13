@@ -22,12 +22,7 @@ def _optional_text(value: Any) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class DatasetRecord:
-    """Validated metadata for one image.
-
-    Paths are resolved beneath the configured data root when records are parsed.
-    Label semantics are fixed to 0=real and 1=fake.
-    """
-
+    """Validated metadata for one image."""
     sample_id: str
     image_path: Path
     label: int

@@ -1,7 +1,5 @@
 # Outputs directory
 
-## Purpose
-
 Store generated run artefacts, never hand-edited results. Each run should have a unique directory containing the resolved config, logs, environment record, split identity, sample-level predictions, aggregate metrics, and plots.
 
 Prefer tidy CSV/Parquet prediction tables with `sample_id`, `label`, `generator`, `score`, `prediction`, `split`, `seed`, and `checkpoint_id`. Sample-level data makes later metric corrections possible without rerunning inference.
@@ -9,7 +7,7 @@ Prefer tidy CSV/Parquet prediction tables with `sample_id`, `label`, `generator`
 ## Run status
 
 A run directory's `status.json` says `completed` or `failed`. A directory with **no**
-`status.json` was interrupted before it finished — the grid protocols (`fine_tuning`,
+`status.json` was interrupted before it finished; the grid protocols (`fine_tuning`,
 `ablation`) are not resumable, so such a directory holds no result and is inert. It is
 kept rather than deleted so the audit trail records the attempt;
 `src.evaluation.aggregation` reports its status as `incomplete` and excludes it from every
@@ -27,7 +25,7 @@ run directory.
 | `chapter4/` | `python -m scripts.build_chapter4` | the Chapter 4 figure and table package |
 | `dissertation_results/` | `python -m scripts.build_dissertation_results` | the drafting notes (`RESULTS_NOTES.md`), the analysis CSVs and the external-challenge manifest |
 | `external_challenge/` | `python -m scripts.build_external_figures` | the external contemporary-generator study, reported separately from every internal table |
-| `final_results/` | `python -m scripts.build_final_results_summary` | **one flat table covering every reported cell, internal and external** — the fastest route to a Results table |
+| `final_results/` | `python -m scripts.build_final_results_summary` | **one flat table covering every reported cell, internal and external**; the fastest route to a Results table |
 
 Each of those directories carries its own README, written by its generating script.
 
@@ -35,10 +33,3 @@ Each of those directories carries its own README, written by its generating scri
 no checkpoint writing, and no threshold search. `src/evaluation/aggregation.py` and
 `src/evaluation/dissertation.py` deliberately do not discover them, so an external number
 cannot reach an internal table by accident.
-
-## Implementation checklist
-
-- [x] Define collision-resistant run identifiers.
-- [x] Save resolved configuration and environment metadata.
-- [x] Save sample-level predictions before aggregate metrics.
-- [x] Make notebook outputs traceable to run identifiers.

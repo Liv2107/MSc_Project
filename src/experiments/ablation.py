@@ -1,21 +1,4 @@
-"""Fine-tuning-depth ablation experiment.
-
-Does recovery require changing CLIP broadly, or is a lightweight classifier update
-enough? Three modes are compared: ``head_only`` tests whether the frozen features
-already separate the new source, ``last_block`` whether limited high-level adaptation
-suffices, and ``full`` maximum adaptability at higher compute and overfitting risk.
-
-Only the trainable layers differ. The runner reuses the recovery experiment's own cell
-runner so the data path cannot drift between the two, and asserts the controls declared
-in ``configs/ablation.yaml``: one identical starting checkpoint per cell, byte-identical
-adaptation subset IDs across modes, one fixed final-test record set, and a recorded
-training budget whose mode-specific overrides are flagged as fairness caveats. The run
-matrix is written to disk before execution, so the intended grid is auditable
-independently of what completed.
-
-Full-model under-performance is at least as likely to reflect small-data overfitting or
-optimisation difficulty as a lack of capacity.
-"""
+"""Fine-tuning-depth ablation experiment."""
 
 from __future__ import annotations
 
@@ -70,7 +53,6 @@ INTERPRETATION_NOTE = (
 
 def validate_ablation_settings(config: Mapping[str, Any]) -> dict[str, Any]:
     """Check the freeze modes, controls, and budget policy before any training."""
-
     settings = config.get("ablation") or {}
     modes = list(settings.get("modes") or [])
     if not modes:
@@ -112,13 +94,7 @@ def validate_ablation_settings(config: Mapping[str, Any]) -> dict[str, Any]:
 def resolve_mode_overrides(
     config: Mapping[str, Any], modes: Sequence[str]
 ) -> dict[str, dict[str, Any]]:
-    """Read optional per-mode optimisation overrides and flag any unequal budget.
-
-    ``mode_overrides: {head_only: null, ...}`` means "use the shared training settings",
-    which is the fair default. A mode that overrides ``epochs`` breaks the equal-epoch
-    budget, so it is surfaced as a caveat rather than silently applied.
-    """
-
+    """Read optional per-mode optimisation overrides and flag any unequal budget."""
     raw = config.get("mode_overrides") or {}
     resolved: dict[str, dict[str, Any]] = {}
     for mode in modes:
@@ -157,7 +133,6 @@ def build_run_matrix(
     training_seeds: Sequence[int],
 ) -> list[dict[str, Any]]:
     """Enumerate the full grid up front so the intended study is auditable."""
-
     matrix: list[dict[str, Any]] = []
     for mode in modes:
         for fraction in fractions:
@@ -184,13 +159,7 @@ def assert_subset_ids_controlled(
     fractions: Sequence[float],
     subset_seeds: Sequence[int],
 ) -> dict[str, Any]:
-    """Record the exact labelled-image identity each cell will reuse across modes.
-
-    Every mode is handed the same ``AdaptationBudget`` objects, so control is
-    structural. This returns a digest per (fraction, subset seed) so the output proves
-    which IDs were shared rather than merely claiming it.
-    """
-
+    """Record the exact labelled-image identity each cell will reuse across modes."""
     digests: dict[str, Any] = {}
     for subset_seed in subset_seeds:
         for fraction in fractions:
@@ -209,7 +178,6 @@ def assert_subset_ids_controlled(
 
 def summarise_by_mode(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Compare freeze modes at equal budget, including cost and trainable size."""
-
     grouped: dict[tuple[float, str], list[Mapping[str, Any]]] = {}
     for row in rows:
         if float(row["adaptation_percentage"]) == 0.0:
@@ -241,7 +209,6 @@ def summarise_by_mode(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
 
 def run_ablation(config_path: Path) -> Path:
     """Compare head-only, last-block, and full adaptation fairly."""
-
     loaded = load_config(config_path)
     if loaded.values["experiment"]["type"] != "ablation":
         raise ValueError("run_ablation requires experiment.type=ablation")
@@ -286,7 +253,6 @@ def run_ablation(config_path: Path) -> Path:
         )
         del starting
 
-        # Subsets are built ONCE and shared by every mode: control by construction.
         pools = split_adaptation_pool(
             adaptation_pool, validation_fraction=validation_fraction, seed=subset_seeds[0]
         )
@@ -360,8 +326,6 @@ def run_ablation(config_path: Path) -> Path:
                 epochs=override.get("epochs"),
             )
             record = dict(cell.record)
-            # Freeze policy is an invariant: the same mode must always expose the same
-            # trainable parameters, whatever the budget or seed.
             names = tuple(record.get("trainable_parameter_names") or ())
             if mode in trainable_by_mode and trainable_by_mode[mode] != names:
                 raise RuntimeError(

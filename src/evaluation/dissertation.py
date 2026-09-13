@@ -1,36 +1,4 @@
-"""Derived analysis over the SAVED run artefacts, for the dissertation results chapters.
-
-This module performs no training, no inference and no file mutation inside run
-directories. Every number it returns is either read from a saved run or computed by
-arithmetic over numbers a run already saved, and each derived quantity is named so it
-cannot be mistaken for a measurement (``absolute_gain``, ``gain_per_labelled_fake``,
-``fraction_of_total_recovery``).
-
-It exists so that the two dissertation notebooks and the export script share one
-implementation. A notebook that recomputed these tables in its own cells would drift
-from the exported CSVs the moment either was edited.
-
-Rules inherited from ``src.evaluation.aggregation`` and enforced here
---------------------------------------------------------------------
-* Nothing is imputed. A quantity no run measured stays ``None``.
-* A threshold-dependent metric is only compared against a reference measured at the
-  same operating point.
-* A derived ratio whose denominator makes the comparison meaningless is returned with
-  an explicit ``*_is_meaningful`` flag and a stated reason, rather than silently
-  quoted or silently dropped.
-* No significance is claimed anywhere. One subset seed and one training seed were run,
-  so no spread is measurable and none is reported.
-
-Vocabulary
-----------
-``labelled_images_consumed``
-    Every labelled image the adaptation cell saw, authentic and generated together.
-``held_out_fake_count``
-    Only the held-out generator's images inside that pool. At the 5% budget these are
-    100 of 800. The distinction matters: "cost" in this project's research question is
-    the number of *new-generator* examples someone has to label, so that is the
-    denominator used for generated-image efficiency.
-"""
+"""Derived analysis over the SAVED run artefacts, for the dissertation results chapters."""
 
 from __future__ import annotations
 
@@ -50,10 +18,8 @@ from src.evaluation.aggregation import (
     summarise_recovery,
 )
 
-#: Budgets, as fractions, in the order the protocol declares them.
 BUDGETS: tuple[float, ...] = (0.0, 0.05, 0.10, 0.20, 0.50)
 
-#: Adjacent budget steps the diminishing-returns analysis reports.
 BUDGET_STEPS: tuple[tuple[float, float], ...] = (
     (0.0, 0.05),
     (0.05, 0.10),
@@ -61,20 +27,14 @@ BUDGET_STEPS: tuple[tuple[float, float], ...] = (
     (0.20, 0.50),
 )
 
-#: Depth order from cheapest to most expensive. Used for monotonicity checks.
 DEPTHS: tuple[str, ...] = ("head_only", "last_block", "full")
 
-#: Metrics carried through every derived table.
 CORE_METRICS: tuple[str, ...] = ("roc_auc", "average_precision", "f1")
 
-#: Metrics that do not depend on a decision threshold.
 THRESHOLD_FREE: frozenset[str] = frozenset({"roc_auc", "average_precision"})
 
-#: Attainment levels probed in the recovery analysis. These are reporting conveniences,
-#: not pre-registered success criteria, and are labelled as such wherever they appear.
 ATTAINMENT_LEVELS: tuple[float, ...] = (0.90, 0.95, 0.98)
 
-#: Metric display names, used by tables and figure axis labels alike.
 METRIC_LABELS: Mapping[str, str] = {
     "roc_auc": "ROC-AUC",
     "average_precision": "PR-AUC (average precision)",
@@ -85,15 +45,8 @@ METRIC_LABELS: Mapping[str, str] = {
 }
 
 
-# --------------------------------------------------------------------------- loading
-
-
 class Context:
-    """Everything the derived tables are computed from, loaded once.
-
-    Attributes are plain lists of dicts so a notebook can hand any of them straight to
-    ``pandas.DataFrame`` without this module depending on pandas.
-    """
+    """Everything the derived tables are computed from, loaded once."""
 
     def __init__(self, output_root: Path) -> None:
         self.output_root = output_root
@@ -106,7 +59,6 @@ class Context:
         self.degradation: list[dict[str, Any]] = degradation_rows(self.consolidated)
         self._metrics_cache: dict[str, dict[str, Any]] = {}
 
-    # -- record helpers ----------------------------------------------------
 
     def by_type(self, experiment_type: str) -> list[RunRecord]:
         return [r for r in self.records if r.experiment_type == experiment_type]
@@ -124,16 +76,9 @@ class Context:
         value = self.metrics(run_id).get("held_out_generator")
         return None if value is None else str(value)
 
-    # -- row helpers -------------------------------------------------------
 
     def cells(self, run_id: str, operating_point: str = "default") -> list[dict[str, Any]]:
-        """Adaptation-cell rows of one run at one operating point, 0% reference included.
-
-        ``condition`` carries the cell id, and each cell additionally emits
-        ``<cell_id>:per_generator:<generator>`` breakdown rows. Only the overall row is
-        wanted here, so the breakdown suffix is what distinguishes them.
-        """
-
+        """Adaptation-cell rows of one run at one operating point, 0% reference included."""
         return [
             row
             for row in self.consolidated
@@ -152,16 +97,11 @@ class Context:
 
 def load_context(output_root: Path | str = Path("outputs")) -> Context:
     """Discover every saved run under ``output_root`` and build the shared tables."""
-
     return Context(Path(output_root))
-
-
-# ------------------------------------------------------------------ small utilities
 
 
 def _f(value: Any) -> float | None:
     """Float or ``None``. Never raises, never substitutes a default."""
-
     if value is None or value == "":
         return None
     try:
@@ -184,7 +124,6 @@ def _find(
     rows: Sequence[Mapping[str, Any]], *, mode: str | None = None, percentage: float | None = None
 ) -> dict[str, Any] | None:
     """The single row matching a depth and budget, or ``None`` if it was never run."""
-
     for row in rows:
         if percentage is not None and _f(row.get("adaptation_percentage")) != percentage:
             continue
@@ -194,16 +133,8 @@ def _find(
     return None
 
 
-# ------------------------------------------------------------- 1. experiment inventory
-
-
 def experiment_inventory(ctx: Context) -> list[dict[str, Any]]:
-    """One row per discovered run, reportable or not, with provenance and cost.
-
-    Excluded runs are listed too, with the reason, because "which runs were left out and
-    why" is itself a result the validation chapter has to state.
-    """
-
+    """One row per discovered run, reportable or not, with provenance and cost."""
     reportable_ids = {record.run_id for record in ctx.records}
     rows: list[dict[str, Any]] = []
     for record in sorted(ctx.all_records, key=lambda r: r.run_id):
@@ -244,9 +175,6 @@ def experiment_inventory(ctx: Context) -> list[dict[str, Any]]:
                 ),
                 "labelled_fake_counts": ", ".join(str(n) for n in fakes) if fakes else None,
                 "adaptation_pool_fakes": (
-                    # 50% of the pool is the largest budget run, so the pool size is
-                    # implied only when that budget exists. Otherwise it stays undefined
-                    # rather than being extrapolated from a smaller budget.
                     max(fakes) * 2 if fakes and max(budgets) == 0.50 else None
                 ),
                 "trainable_parameter_counts": (
@@ -269,17 +197,8 @@ def experiment_inventory(ctx: Context) -> list[dict[str, Any]]:
     return rows
 
 
-# ------------------------------------------------- 2. in-distribution vs unseen
-
-
 def degradation_table(ctx: Context) -> list[dict[str, Any]]:
-    """In-distribution against unseen, per held-out generator and classifier head.
-
-    ``percentage_point_drop`` is the absolute drop expressed in points, which is how the
-    chapter prose quotes it; ``relative_drop_pct`` is the same drop as a proportion of
-    the in-distribution value. Both come from the same two measured numbers.
-    """
-
+    """In-distribution against unseen, per held-out generator and classifier head."""
     rows: list[dict[str, Any]] = []
     for row in ctx.degradation:
         if row.get("operating_point") != "default":
@@ -309,16 +228,8 @@ def degradation_table(ctx: Context) -> list[dict[str, Any]]:
     return rows
 
 
-# ---------------------------------------------------------------- 3. recovery curves
-
-
 def recovery_table(ctx: Context) -> list[dict[str, Any]]:
-    """Every adaptation cell of every ablation and recovery run, at the fixed threshold.
-
-    One row per (run, depth, budget). Metrics are columns rather than rows because this
-    is the table the recovery figures and the marginal-gain analysis both index into.
-    """
-
+    """Every adaptation cell of every ablation and recovery run, at the fixed threshold."""
     rows: list[dict[str, Any]] = []
     for record in [*ctx.ablation_runs(), *ctx.recovery_runs()]:
         held_out = ctx.held_out_of(record.run_id)
@@ -369,32 +280,8 @@ def recovery_table(ctx: Context) -> list[dict[str, Any]]:
     )
 
 
-def recovery_curve(
-    ctx: Context, *, generator: str, mode: str, protocol: str = "ablation"
-) -> list[dict[str, Any]]:
-    """One depth's curve over budgets for one generator, 0% reference first."""
-
-    rows = [
-        r
-        for r in recovery_table(ctx)
-        if r["held_out_generator"] == generator
-        and r["protocol"] == protocol
-        and r["fine_tune_mode"] in (mode, "none")
-    ]
-    return sorted(rows, key=lambda r: r["adaptation_percentage"])
-
-
-# ------------------------------------------------- 4. marginal recovery / diminishing
-
-
 def marginal_recovery(ctx: Context) -> list[dict[str, Any]]:
-    """Gain between adjacent budgets, and what each additional labelled fake buys.
-
-    ``gain_per_labelled_fake`` divides by the *additional* held-out-generator images the
-    step consumed, not by the cumulative total, because the question is what the next
-    tranche of labelling effort returns.
-    """
-
+    """Gain between adjacent budgets, and what each additional labelled fake buys."""
     table = recovery_table(ctx)
     rows: list[dict[str, Any]] = []
     for record in ctx.ablation_runs():
@@ -462,12 +349,7 @@ def marginal_recovery(ctx: Context) -> list[dict[str, Any]]:
 
 
 def first_budget_reaching(ctx: Context) -> list[dict[str, Any]]:
-    """The cheapest budget at which each depth reaches each attainment level.
-
-    A level a curve never reaches is reported as not reached, with the best value it did
-    reach, rather than extrapolated to a budget that was never run.
-    """
-
+    """The cheapest budget at which each depth reaches each attainment level."""
     table = recovery_table(ctx)
     rows: list[dict[str, Any]] = []
     for record in ctx.ablation_runs():
@@ -514,12 +396,8 @@ def first_budget_reaching(ctx: Context) -> list[dict[str, Any]]:
     return rows
 
 
-# ------------------------------------------------------------ 5. fine-tuning depth
-
-
 def depth_table(ctx: Context) -> list[dict[str, Any]]:
     """Depth against budget for every ablation, with cost columns beside the metrics."""
-
     return [
         row
         for row in recovery_table(ctx)
@@ -528,20 +406,13 @@ def depth_table(ctx: Context) -> list[dict[str, Any]]:
 
 
 def depth_comparisons(ctx: Context) -> list[dict[str, Any]]:
-    """The cross-budget and cross-depth statements the depth section has to make.
-
-    Each returned row is a claim with the two measured numbers behind it, so the prose
-    can never state a comparison the rows do not support. ``holds`` is the computed
-    answer, not an assumption.
-    """
-
+    """The cross-budget and cross-depth statements the depth section has to make."""
     table = depth_table(ctx)
     rows: list[dict[str, Any]] = []
     for record in ctx.ablation_runs():
         generator = ctx.held_out_of(record.run_id)
         cells = [r for r in table if r["run_id"] == record.run_id]
 
-        # -- the headline cross-budget comparison: cheap-and-deep against dear-and-shallow
         for metric in CORE_METRICS:
             deep_cheap = _find(cells, mode="full", percentage=0.05)
             shallow_dear = _find(cells, mode="head_only", percentage=0.50)
@@ -549,9 +420,6 @@ def depth_comparisons(ctx: Context) -> list[dict[str, Any]]:
                 a, b = _f(deep_cheap.get(metric)), _f(shallow_dear.get(metric))
                 if a is not None and b is not None:
                     difference = a - b
-                    # A sign is not a result. With one seed and n=500 there is no variance
-                    # estimate, so a margin below the reliability floor supports "matches
-                    # while using ten times less labelled data" but NOT "outperforms".
                     decisive = abs(difference) >= MINIMUM_RELIABLE_GAP
                     if decisive:
                         verb = "exceeds" if difference > 0 else "falls below"
@@ -589,7 +457,6 @@ def depth_comparisons(ctx: Context) -> list[dict[str, Any]]:
                         }
                     )
 
-        # -- does depth order monotonically at each budget?
         for budget in (0.05, 0.10, 0.20, 0.50):
             for metric in CORE_METRICS:
                 values = []
@@ -626,7 +493,6 @@ def depth_comparisons(ctx: Context) -> list[dict[str, Any]]:
                     }
                 )
 
-        # -- does any deeper depth ever lose to head_only at the same budget?
         for metric in CORE_METRICS:
             losses = []
             for budget in (0.05, 0.10, 0.20, 0.50):
@@ -660,24 +526,8 @@ def depth_comparisons(ctx: Context) -> list[dict[str, Any]]:
     return rows
 
 
-# ------------------------------------------------------------- 6. parameter efficiency
-
-
 def parameter_efficiency(ctx: Context) -> list[dict[str, Any]]:
-    """Gain over the 0% reference per unit of parameter, time and labelling cost.
-
-    Why some ratios are flagged rather than quoted
-    ----------------------------------------------
-    A gain-per-cost ratio is only interpretable when the gain itself is large enough to
-    be distinguishable from run-to-run noise. This project ran one subset seed and one
-    training seed, so no noise estimate exists; the conservative substitute used here is
-    the same ``MINIMUM_RELIABLE_GAP`` (0.02) that the aggregation layer already applies
-    to ``gap_closed_fraction``. Where the measured gain is below that, the ratio is
-    returned with ``efficiency_is_meaningful=False`` and a reason, because dividing a
-    near-zero numerator by a very small denominator (the 769-parameter head) produces a
-    spectacular number that describes the noise floor, not the method.
-    """
-
+    """Gain over the 0% reference per unit of parameter, time and labelling cost."""
     table = depth_table(ctx)
     rows: list[dict[str, Any]] = []
     for record in ctx.ablation_runs():
@@ -736,18 +586,8 @@ def parameter_efficiency(ctx: Context) -> list[dict[str, Any]]:
     return rows
 
 
-# ----------------------------------------------------- 7. threshold and calibration
-
-
 def threshold_table(ctx: Context) -> list[dict[str, Any]]:
-    """The same cell scored at each saved operating point, so recalibration is visible.
-
-    ``default`` is the fixed 0.5 prior. ``adaptation_selected`` is the threshold chosen
-    on the cell's own adaptation-validation split. ``baseline_unchanged`` is the
-    threshold the pre-adaptation model was operating at. Comparing the first two answers
-    whether recalibration helps or harms on the unseen test set.
-    """
-
+    """The same cell scored at each saved operating point, so recalibration is visible."""
     rows: list[dict[str, Any]] = []
     for record in [*ctx.ablation_runs(), *ctx.recovery_runs()]:
         generator = ctx.held_out_of(record.run_id)
@@ -817,7 +657,6 @@ def threshold_table(ctx: Context) -> list[dict[str, Any]]:
 
 def recalibration_verdict(ctx: Context) -> list[dict[str, Any]]:
     """Per generator: how often adaptation-selected thresholds beat the fixed 0.5."""
-
     rows = [r for r in threshold_table(ctx) if r["recalibration_f1_delta"] is not None]
     verdicts: list[dict[str, Any]] = []
     for generator in sorted({str(r["held_out_generator"]) for r in rows}):
@@ -844,16 +683,8 @@ def recalibration_verdict(ctx: Context) -> list[dict[str, Any]]:
     return verdicts
 
 
-# ----------------------------------------------------------------- 8. confusion sets
-
-
 def confusion_selection(ctx: Context) -> list[dict[str, Any]]:
-    """The small set of confusion matrices worth showing, with counts already resolved.
-
-    Chosen to show the failure and the two ways of fixing it, not to enumerate all 26
-    adapted cells.
-    """
-
+    """The small set of confusion matrices worth showing, with counts already resolved."""
     table = recovery_table(ctx)
     wanted = [
         ("biggan", "none", 0.0, "BigGAN 0% (unseen, no adaptation)"),
@@ -912,7 +743,6 @@ def confusion_selection(ctx: Context) -> list[dict[str, Any]]:
 
 def prediction_path(ctx: Context, run_id: str, mode: str, percentage: float) -> Path | None:
     """Where the per-sample scores of one cell live, if they were saved."""
-
     run_dir = ctx.output_root / run_id
     if percentage == 0.0:
         candidate = run_dir / "zero_percent_unseen_test_predictions.csv"
@@ -922,12 +752,8 @@ def prediction_path(ctx: Context, run_id: str, mode: str, percentage: float) -> 
     return candidate if candidate.exists() else None
 
 
-# ------------------------------------------------------------ 10. cross-generator
-
-
 def cross_generator_synthesis(ctx: Context) -> list[dict[str, Any]]:
     """One row per held-out generator: the whole story in the columns of a single table."""
-
     table = recovery_table(ctx)
     efficiency = parameter_efficiency(ctx)
     rows: list[dict[str, Any]] = []
@@ -954,10 +780,6 @@ def cross_generator_synthesis(ctx: Context) -> list[dict[str, Any]]:
         adapted = [r for r in cells if r["fine_tune_mode"] in DEPTHS and r["roc_auc"] is not None]
         best = max(adapted, key=lambda r: r["roc_auc"]) if adapted else None
 
-        # Most efficient condition: the cheapest cell, in labelled held-out images, that
-        # reaches a stated attainment level. An attainment level is an arbitrary but
-        # *declared* bar; a "within 0.01 of the best" rule would instead hide an
-        # arbitrary tolerance inside a column that looks measured.
         def cheapest_reaching(
             level: float, adapted: Sequence[Mapping[str, Any]] = adapted
         ) -> dict[str, Any] | None:
@@ -1019,7 +841,6 @@ def cross_generator_synthesis(ctx: Context) -> list[dict[str, Any]]:
 
 def core_results(ctx: Context) -> list[dict[str, Any]]:
     """The single flat table every other export is a view of. One row per measured cell."""
-
     rows: list[dict[str, Any]] = []
     for row in recovery_table(ctx):
         rows.append({k: v for k, v in row.items()})
@@ -1062,16 +883,8 @@ def core_results(ctx: Context) -> list[dict[str, Any]]:
     return rows
 
 
-# ------------------------------------------------------------------- validation side
-
-
 def reproduction_checks(ctx: Context) -> list[dict[str, Any]]:
-    """Ablation head-only cells against the standalone recovery run that fitted them.
-
-    The two runs share a starting checkpoint, subset seed and test set, so agreement is
-    the reproducibility claim and any disagreement is a finding, not a rounding note.
-    """
-
+    """Ablation head-only cells against the standalone recovery run that fitted them."""
     table = recovery_table(ctx)
     rows: list[dict[str, Any]] = []
     for ablation in ctx.ablation_runs():
@@ -1113,7 +926,6 @@ def reproduction_checks(ctx: Context) -> list[dict[str, Any]]:
 
 def provenance_checks(ctx: Context) -> list[dict[str, Any]]:
     """Checkpoint provenance, test-set identity and subset identity, per ablation run."""
-
     rows: list[dict[str, Any]] = []
     for record in ctx.ablation_runs():
         metrics = ctx.metrics(record.run_id)
@@ -1154,12 +966,7 @@ def provenance_checks(ctx: Context) -> list[dict[str, Any]]:
 
 
 def nested_subset_checks(ctx: Context) -> list[dict[str, Any]]:
-    """Whether each budget's adaptation sample IDs are a superset of the smaller budget.
-
-    Nesting is what makes the recovery curve a curve rather than five unrelated fits, so
-    it is checked from the saved sample IDs rather than assumed from the config flag.
-    """
-
+    """Whether each budget's adaptation sample IDs are a superset of the smaller budget."""
     import json
 
     rows: list[dict[str, Any]] = []
@@ -1204,12 +1011,7 @@ def nested_subset_checks(ctx: Context) -> list[dict[str, Any]]:
 
 
 def adaptation_test_overlap(ctx: Context) -> list[dict[str, Any]]:
-    """Direct sample-ID intersection between every adaptation subset and the final test set.
-
-    This is the leakage check that matters most: any non-zero intersection would mean a
-    recovery number was measured on images the cell was fitted on.
-    """
-
+    """Direct sample-ID intersection between every adaptation subset and the final test set."""
     import json
 
     rows: list[dict[str, Any]] = []
@@ -1243,7 +1045,6 @@ def adaptation_test_overlap(ctx: Context) -> list[dict[str, Any]]:
 
 def limitations(ctx: Context) -> list[dict[str, Any]]:
     """Limitations computed from the runs, not recited from a template."""
-
     table = recovery_table(ctx)
     inventory = experiment_inventory(ctx)
     ablation_cells = [r for r in table if r["protocol"] == "ablation"]
@@ -1365,7 +1166,6 @@ def limitations(ctx: Context) -> list[dict[str, Any]]:
 
 def validation_summary(ctx: Context) -> list[dict[str, Any]]:
     """One flat pass/observation table for the validation chapter and its CSV export."""
-
     rows: list[dict[str, Any]] = []
     repro = reproduction_checks(ctx)
     for generator in sorted({str(r["held_out_generator"]) for r in repro}):
@@ -1443,7 +1243,6 @@ def validation_summary(ctx: Context) -> list[dict[str, Any]]:
 
 def dataset_provenance(ctx: Context) -> dict[str, Any]:
     """The dataset audit, read straight from the manifest audit file if it is present."""
-
     import json
 
     path = ctx.output_root.parent / "data" / "manifests" / "tiny_genimage.audit.json"
@@ -1468,16 +1267,8 @@ def dataset_provenance(ctx: Context) -> dict[str, Any]:
     }
 
 
-# ------------------------------------------------------------------------- findings
-
-
 def findings(ctx: Context) -> dict[str, list[str]]:
-    """Machine-derived findings, separated by how much interpretation each carries.
-
-    Every string is formatted from numbers looked up in this call, so the section cannot
-    drift from the data the way a hand-written summary does.
-    """
-
+    """Machine-derived findings, separated by how much interpretation each carries."""
     table = recovery_table(ctx)
     synthesis = {r["held_out_generator"]: r for r in cross_generator_synthesis(ctx)}
     comparisons = depth_comparisons(ctx)
@@ -1543,8 +1334,6 @@ def findings(ctx: Context) -> dict[str, list[str]]:
             f"(mean {verdict['mean_f1_delta']:+.4f}); {verdict['verdict']}."
         )
 
-    # The attainment table carries the depth result far better than any single pairwise
-    # margin does: it states a capability head-only never reaches at any budget run.
     attainment = first_budget_reaching(ctx)
     for generator in sorted({str(r["held_out_generator"]) for r in attainment}):
         for level in ATTAINMENT_LEVELS:
@@ -1568,8 +1357,6 @@ def findings(ctx: Context) -> dict[str, list[str]]:
                     + "."
                 )
 
-    # The same trade-off stated in missed detections rather than in ROC-AUC. This is the
-    # form the margin survives in: counts at a fixed threshold, not a 0.0014 area.
     for generator in sorted({str(r["held_out_generator"]) for r in table}):
         cells = [
             r

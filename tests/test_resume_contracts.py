@@ -1,11 +1,4 @@
-"""Contract tests for resuming an interrupted training run.
-
-The claim under test is narrow and falsifiable: a run interrupted part-way must
-continue from its last completed epoch, and the result must match the run that would
-have happened had it never been interrupted. Asserting only that "it finishes" would
-pass for a silent restart, so the headline test compares a resumed run's per-epoch
-history against an uninterrupted reference run of the same configuration.
-"""
+"""Contract tests for resuming an interrupted training run."""
 
 from __future__ import annotations
 
@@ -47,7 +40,6 @@ class OfflineBackbone(nn.Module):
 
 def _write_fixture_project(root: Path) -> Path:
     """Build a minimal manifest, split file, and images, and return the config path."""
-
     config_dir = root / "configs"
     data_dir = root / "data"
     image_dir = data_dir / "images"
@@ -102,8 +94,6 @@ def _write_fixture_project(root: Path) -> Path:
             "learning_rate": 0.01,
         }
     )
-    # Early stopping stays ON so the resumed run must also restore its counters; the
-    # patience exceeds the epoch budget so it cannot end the run before epoch 4.
     config["training"]["early_stopping"].update({"enabled": True, "patience": EPOCHS + 1})
     config_path = config_dir / "baseline.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
@@ -112,7 +102,6 @@ def _write_fixture_project(root: Path) -> Path:
 
 def _count_train_epochs(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     """Record every epoch the engine actually trains, to catch a silent restart."""
-
     calls: list[int] = []
     real_train = engine_module.train_one_epoch
 
@@ -126,7 +115,6 @@ def _count_train_epochs(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
 def _interrupt_at(monkeypatch: pytest.MonkeyPatch, epoch: int) -> None:
     """Simulate a crash at the start of ``epoch`` -- a lost node, not a clean stop."""
-
     real_train = engine_module.train_one_epoch
     seen = {"count": 0}
 
@@ -156,14 +144,7 @@ def offline_backbone(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_interrupted_run_resumes_from_its_last_epoch_and_matches_an_unbroken_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, offline_backbone: None
 ) -> None:
-    """The whole feature, end to end: crash at epoch 3, resume, land where we would have.
-
-    Two projects with identical fixtures and identical configs are trained. One runs
-    straight through. The other dies at the start of epoch 3, is resumed, and must then
-    train only epochs 3 and 4 -- and produce the same per-epoch losses and metrics as
-    the run that was never interrupted.
-    """
-
+    """The whole feature, end to end: crash at epoch 3, resume, land where we would have."""
     reference_config = _write_fixture_project(tmp_path / "reference")
     reference_dir = _run_uninterrupted(reference_config)
 
@@ -179,7 +160,6 @@ def test_interrupted_run_resumes_from_its_last_epoch_and_matches_an_unbroken_run
     assert len(run_dirs) == 1, "the interrupted attempt must not fan out into several runs"
     interrupted_dir = run_dirs[0]
 
-    # The failed run is marked failed, and carries exactly the two completed epochs.
     status = json.loads((interrupted_dir / "status.json").read_text(encoding="utf-8"))
     assert status["status"] == "failed"
     state = json.loads((interrupted_dir / TRAINING_STATE_FILENAME).read_text(encoding="utf-8"))
@@ -191,7 +171,6 @@ def test_interrupted_run_resumes_from_its_last_epoch_and_matches_an_unbroken_run
     trained_epochs = _count_train_epochs(monkeypatch)
     resumed_dir = baseline_module.run_baseline(interrupted_config, resume_from=interrupted_dir)
 
-    # It continued rather than restarted: two more epochs, in the same directory.
     assert resumed_dir == interrupted_dir
     assert len(trained_epochs) == EPOCHS - (INTERRUPT_BEFORE_EPOCH - 1)
     assert [path for path in output_root.iterdir() if path.is_dir()] == [interrupted_dir]
@@ -217,7 +196,6 @@ def test_completed_run_directory_is_unchanged_by_the_resume_feature(
     tmp_path: Path, offline_backbone: None
 ) -> None:
     """A run that completes leaves no resume scaffolding behind."""
-
     run_dir = _run_uninterrupted(_write_fixture_project(tmp_path / "project"))
     assert not (run_dir / TRAINING_STATE_FILENAME).exists()
     assert not (run_dir / "resume_events.json").exists()
@@ -230,7 +208,6 @@ def test_completed_run_directory_is_unchanged_by_the_resume_feature(
 
 def test_resuming_a_completed_run_is_refused(tmp_path: Path, offline_backbone: None) -> None:
     """Finished results are not silently overwritten by a stray --resume."""
-
     config_path = _write_fixture_project(tmp_path / "project")
     run_dir = _run_uninterrupted(config_path)
     with pytest.raises(ValueError, match="already completed"):
@@ -241,7 +218,6 @@ def test_resuming_with_a_changed_config_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, offline_backbone: None
 ) -> None:
     """Epochs trained under one configuration are never attributed to another."""
-
     config_path = _write_fixture_project(tmp_path / "project")
     with monkeypatch.context() as patch:
         _interrupt_at(patch, INTERRUPT_BEFORE_EPOCH)
@@ -260,7 +236,6 @@ def test_resume_refuses_a_run_with_no_completed_epoch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, offline_backbone: None
 ) -> None:
     """Dying inside epoch 1 leaves nothing to continue from, and says so."""
-
     config_path = _write_fixture_project(tmp_path / "project")
     with monkeypatch.context() as patch:
         _interrupt_at(patch, 1)
@@ -276,7 +251,6 @@ def test_resume_refuses_a_checkpoint_and_sidecar_that_disagree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, offline_backbone: None
 ) -> None:
     """A crash between the two writes is detected, not silently spliced together."""
-
     config_path = _write_fixture_project(tmp_path / "project")
     with monkeypatch.context() as patch:
         _interrupt_at(patch, INTERRUPT_BEFORE_EPOCH)
@@ -294,7 +268,6 @@ def test_resume_refuses_a_checkpoint_and_sidecar_that_disagree(
 
 def test_cli_rejects_resume_for_grid_protocols(tmp_path: Path) -> None:
     """--resume is refused where it has no meaning, rather than quietly ignored."""
-
     import main as main_module
 
     config_path = Path(__file__).parents[1] / "configs" / "tiny_recovery_biggan.yaml"
@@ -312,7 +285,6 @@ def test_cli_parses_the_resume_flag() -> None:
 
 def test_run_baseline_signature_keeps_resume_optional() -> None:
     """Existing call sites keep working untouched."""
-
     runner: Callable[..., Path] = baseline_module.run_baseline
     import inspect
 

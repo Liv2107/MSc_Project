@@ -1,17 +1,4 @@
-"""Assemble the external contemporary-generator challenge manifest.
-
-Step 4 of the pre-registered protocol in section 15.5 of ``RESULTS_NOTES.md``. Reads the
-generated images and the provenance CSV written at generation time, validates every file,
-preprocesses them through the same pinned policy as the internal benchmark, pairs them
-with authentic comparators drawn by protocol from the held-out real test pool, and writes
-a manifest in the existing dataset schema plus an audit record.
-
-Evaluation only. No split file is written and nothing here can place an external image in
-a training, validation, or threshold-selection selection.
-
-Usage:
-    python -m scripts.build_external_manifest
-"""
+"""Assemble the external contemporary-generator challenge manifest."""
 
 from __future__ import annotations
 

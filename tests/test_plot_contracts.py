@@ -1,10 +1,4 @@
-"""Plotting contracts: validation, returned objects, and honest handling of gaps.
-
-The figures carry dissertation claims, so these tests check the properties that would
-otherwise mislead a reader: undefined metrics must not be drawn as zero, a recovery
-curve must not be plotted without its 0% reference, and metric axes must span [0, 1]
-so no gain can be exaggerated by cropping.
-"""
+"""Plotting contracts: validation, returned objects, and honest handling of gaps."""
 
 from __future__ import annotations
 
@@ -41,14 +35,10 @@ def recovery_row(mode: str, fraction: float, f1: float | None, **extra: Any) -> 
     }
 
 
-# --------------------------------------------------------------- confusion matrices
-
-
 def test_confusion_matrix_returns_a_figure_and_validates_shape() -> None:
     figure, axes = plot_confusion_matrix(np.asarray([[3, 1], [2, 4]]))
     assert isinstance(figure, Figure)
     assert isinstance(axes, Axes)
-    # Axis labels must name the classes, not just 0/1.
     assert [text.get_text() for text in axes.get_xticklabels()] == ["Real (0)", "Fake (1)"]
 
     with pytest.raises(ValueError, match="must be 2x2"):
@@ -61,11 +51,7 @@ def test_row_normalised_confusion_matrix_marks_zero_support_rows_as_undefined() 
     _, axes = plot_confusion_matrix(np.asarray([[0, 0], [2, 4]]), normalize=True)
     annotations = [text.get_text() for text in axes.texts]
     assert any("undefined" in text for text in annotations)
-    # The populated row still shows rates alongside raw counts.
     assert any("0.333" in text and "n=2" in text for text in annotations)
-
-
-# ------------------------------------------------------------------------- curves
 
 
 def test_roc_and_pr_plots_span_the_full_unit_axes() -> None:
@@ -84,7 +70,6 @@ def test_roc_and_pr_plots_span_the_full_unit_axes() -> None:
     )
     assert pr_axes.get_ylim() == (0.0, 1.0)
     pr_labels = [text.get_text() for text in pr_axes.get_legend().get_texts()]
-    # Average precision must be named as such, never as an interpolated area.
     assert any("AP=0.750" in label for label in pr_labels)
     assert any("Prevalence baseline" in label for label in pr_labels)
 
@@ -107,9 +92,6 @@ def test_curve_plots_validate_their_inputs() -> None:
         plot_precision_recall_curves({"a": ([0.0, 1.2], [1.0, 0.5])}, prevalence=0.5)
 
 
-# -------------------------------------------------------------- generator overview
-
-
 def test_generator_plot_excludes_undefined_metrics_and_shows_support() -> None:
     rows = [
         {"generator": "adm", "support": 40, "roc_auc": 0.9},
@@ -120,9 +102,7 @@ def test_generator_plot_excludes_undefined_metrics_and_shows_support() -> None:
     tick_labels = [text.get_text() for text in axes.get_yticklabels()]
     assert len(tick_labels) == 2
     assert all("n=40" in label for label in tick_labels)
-    # Ascending order means the weakest generator is listed first.
     assert "biggan" in tick_labels[0]
-    # The undefined slice is named in the figure rather than silently dropped.
     assert any("real" in text.get_text() for text in axes.texts)
     assert axes.get_xlim() == (0.0, 1.0)
 
@@ -138,9 +118,6 @@ def test_generator_plot_requires_the_named_metric_and_support() -> None:
         )
 
 
-# ----------------------------------------------------------------- history curves
-
-
 def test_training_curves_mark_the_selected_epoch() -> None:
     history = [
         {"epoch": 1, "split": "train", "loss": 0.7, "f1": 0.5},
@@ -154,9 +131,6 @@ def test_training_curves_mark_the_selected_epoch() -> None:
     assert any("train loss" in label for label in labels)
     with pytest.raises(ValueError, match="history is empty"):
         plot_training_curves([])
-
-
-# --------------------------------------------------------------- recovery curves
 
 
 def test_recovery_plot_requires_the_zero_percent_reference() -> None:
@@ -178,7 +152,6 @@ def test_recovery_plot_shows_counts_and_keeps_the_full_metric_axis() -> None:
     assert any("n=48" in label for label in tick_labels)
     labels = [text.get_text() for text in axes.get_legend().get_texts()]
     assert any("0% adaptation reference (0.100)" in label for label in labels)
-    # The axis must not extend beyond the observed budgets.
     assert axes.get_xlim()[1] <= 52
 
 
@@ -205,9 +178,6 @@ def test_recovery_plot_validates_rows() -> None:
         plot_fine_tuning_recovery([{"adaptation_percentage": 0.0, "f1": 0.5}], metric_name="f1")
     with pytest.raises(ValueError, match="no recovery row has a defined"):
         plot_fine_tuning_recovery([recovery_row("none", 0.0, None)], metric_name="f1")
-
-
-# ------------------------------------------------------- generalisation degradation
 
 
 def degradation_row(
@@ -247,7 +217,6 @@ def test_degradation_plot_only_draws_one_operating_point() -> None:
         degradation_row("f1", 0.85, 0.70, operating_point="validation_selected"),
     ]
     _, axes = plot_generalisation_degradation(rows, metrics=("f1",))
-    # Two bars, not four: mixing thresholds in one chart would not be a comparison.
     assert len(axes.patches) == 2
     with pytest.raises(ValueError, match="no degradation row at operating point"):
         plot_generalisation_degradation(rows, metrics=("f1",), operating_point="adaptation")
@@ -256,7 +225,6 @@ def test_degradation_plot_only_draws_one_operating_point() -> None:
 def test_degradation_plot_lists_one_sided_metrics_instead_of_drawing_them() -> None:
     rows = [degradation_row("roc_auc", 0.95, 0.90), degradation_row("f1", None, 0.80)]
     _, axes = plot_generalisation_degradation(rows, metrics=("roc_auc", "f1"))
-    # The undefined pair must not be drawn against an implied zero.
     assert len(axes.patches) == 2
     assert any("Undefined on one side" in text.get_text() for text in axes.texts)
 
@@ -264,9 +232,6 @@ def test_degradation_plot_lists_one_sided_metrics_instead_of_drawing_them() -> N
         plot_generalisation_degradation([degradation_row("f1", None, 0.8)], metrics=("f1",))
     with pytest.raises(ValueError, match="at least one degradation row"):
         plot_generalisation_degradation([])
-
-
-# ------------------------------------------------------------- parameter efficiency
 
 
 def efficiency_row(
@@ -287,7 +252,6 @@ def test_parameter_efficiency_uses_a_log_axis_and_marks_the_starting_point() -> 
         efficiency_row("full", 87_456_769, 0.05, 0.98),
     ]
     _, axes = plot_parameter_efficiency(rows, metric_name="roc_auc", zero_percent_reference=0.90)
-    # Depths differ by orders of magnitude; a linear axis would collapse them together.
     assert axes.get_xscale() == "log"
     assert axes.get_ylim() == (0.0, 1.0)
     labels = [text.get_text() for text in axes.get_legend().get_texts()]
@@ -301,10 +265,7 @@ def test_parameter_efficiency_says_when_no_depth_comparison_exists() -> None:
         efficiency_row("head_only", 769, 0.50, 0.98),
     ]
     _, axes = plot_parameter_efficiency(rows, metric_name="roc_auc")
-    # A single depth is a legitimate state of the study, but the figure must not imply a
-    # trade-off was measured.
     assert any("no depth comparison is shown" in text.get_text() for text in axes.texts)
-    # Budgets sharing an x position must still be labelled distinctly.
     annotations = [text.get_text() for text in axes.texts]
     assert "5%" in annotations and "50%" in annotations
 

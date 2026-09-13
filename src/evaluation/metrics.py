@@ -172,18 +172,7 @@ def threshold_sweep(
     metric: str = "f1",
     thresholds: ArrayLike | None = None,
 ) -> tuple[FloatArray, FloatArray]:
-    """Evaluate one threshold-dependent metric across a grid of decision thresholds.
-
-    This is the threshold-free ranking versus fixed-operating-point distinction made
-    visible: a model whose scores saturate near 0 and 1 keeps the same metric over a wide
-    band of thresholds, while a model whose positives sit at intermediate scores is
-    sharply sensitive to where the threshold falls. Two models can therefore share a
-    ROC-AUC and differ substantially at a fixed 0.5 prior.
-
-    Derived from saved per-sample scores using the same functions the runners use; no new
-    decision is taken here. Returns ``(thresholds, values)``.
-    """
-
+    """Evaluate one threshold-dependent metric across a grid of decision thresholds."""
     if metric not in SWEEP_METRICS:
         raise ValueError(f"unsupported sweep metric {metric!r}; supported: {sorted(SWEEP_METRICS)}")
     true, score = validate_binary_inputs(y_true, y_score)

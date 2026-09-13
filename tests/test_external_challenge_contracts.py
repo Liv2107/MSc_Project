@@ -1,10 +1,4 @@
-"""Contracts for the external contemporary-generator challenge.
-
-Covers the three properties the external study rests on: the generated images are
-validated rather than trusted, the authentic comparators are selected by the same seeded
-protocol the internal unseen tests use, and the evaluation-only protocol cannot be
-configured into something that trains, adapts, or re-thresholds on external data.
-"""
+"""Contracts for the external contemporary-generator challenge."""
 
 from __future__ import annotations
 
@@ -93,7 +87,6 @@ def _write_provenance(path: Path, rows: list[dict[str, Any]]) -> None:
 @pytest.fixture()
 def generated(tmp_path: Path) -> tuple[Path, Path, list[str]]:
     """Four valid generated images with a matching provenance CSV."""
-
     image_dir = tmp_path / "external" / "gen" / "raw"
     digests = []
     for index in range(4):
@@ -107,17 +100,12 @@ def generated(tmp_path: Path) -> tuple[Path, Path, list[str]]:
     return image_dir, provenance, digests
 
 
-# ------------------------------------------------------- 1. generated-image validation
-
-
 def test_valid_generated_images_are_all_usable(generated: tuple[Path, Path, list[str]]) -> None:
     image_dir, provenance, _ = generated
     usable, excluded = inspect_generated_images(image_dir, read_generation_provenance(provenance))
     assert len(usable) == 4
     assert excluded == []
     assert {item.image_format for item in usable} == {"PNG"}
-    # Route B reports no model id, so the field must come back absent rather than
-    # carrying the literal string "unavailable" into the manifest.
     assert {item.image_model_id_if_reported for item in usable} == {None}
 
 
@@ -185,9 +173,6 @@ def test_provenance_csv_listing_a_filename_twice_is_rejected(tmp_path: Path) -> 
         read_generation_provenance(provenance)
 
 
-# --------------------------------------------------- 2. authentic comparator selection
-
-
 def _internal_rows(count: int) -> list[dict[str, Any]]:
     rows = []
     for index in range(count):
@@ -216,13 +201,7 @@ def _internal_rows(count: int) -> list[dict[str, Any]]:
 
 
 def test_comparators_are_a_nested_prefix_of_the_internal_fixed_real_pool() -> None:
-    """The comparators must be a subset of the pool the internal unseen tests score on.
-
-    Both selections shuffle the sorted real test IDs with the same fixed pool seed, so
-    the smaller external selection has to be a prefix of the larger internal one. That
-    is what makes the external and internal numbers share their negatives.
-    """
-
+    """The comparators must be a subset of the pool the internal unseen tests score on."""
     rows = _internal_rows(40)
     split_by_id = {str(row["sample_id"]): "test" for row in rows}
     comparators, metadata = select_authentic_comparators(rows, split_by_id, count=10)
@@ -269,9 +248,6 @@ def test_comparator_selection_refuses_an_undersized_pool() -> None:
     split_by_id = {str(row["sample_id"]): "test" for row in rows}
     with pytest.raises(ValueError, match="need 10"):
         select_authentic_comparators(rows, split_by_id, count=10)
-
-
-# ------------------------------------------------------------------- 3. leakage checks
 
 
 def test_overlap_check_flags_a_generated_image_that_is_an_internal_image(
@@ -350,7 +326,6 @@ def test_overlap_check_flags_a_near_duplicate_of_an_internal_image(tmp_path: Pat
         preprocessing_index=None,
         near_duplicate_scan="all",
     )
-    # A rescale is not byte-identical, so only the perceptual sweep can catch it.
     assert result["byte_identical_matches"] == []
     assert result["passed"] is False
     assert result["near_duplicates_flagged"]
@@ -367,9 +342,6 @@ def test_difference_hash_is_stable_and_distinguishes_unrelated_images(tmp_path: 
     gradient.save(second)
     assert _difference_hash(first) == _difference_hash(first)
     assert _difference_hash(first) != _difference_hash(second)
-
-
-# ------------------------------------------------------------- 4. end-to-end build
 
 
 def _internal_dataset(tmp_path: Path, *, reals: int = 12, fakes: int = 12) -> tuple[Path, Path]:
@@ -483,7 +455,6 @@ def test_build_produces_a_class_balanced_set_with_the_canonical_columns(
 
 def test_build_records_the_generator_as_unidentified(built: dict[str, Any]) -> None:
     """Route B forfeits generator attribution, and the audit has to say so."""
-
     build = built["build"]
     assert build.audit["generator_recorded_as"] == EXTERNAL_GENERATOR_NAME
     assert build.audit["generator_identity_known"] is False
@@ -571,9 +542,6 @@ def test_sample_size_tier_reports_the_unreached_tiers() -> None:
     assert _sample_size_tier(250)["recommended_tier_reached"] is True
 
 
-# ------------------------------------------------------ 5. evaluation-only protocol
-
-
 def _external_config(**overrides: Any) -> dict[str, Any]:
     section = {
         "challenge_id": CHALLENGE_ID,
@@ -651,9 +619,6 @@ def test_external_challenge_is_an_accepted_experiment_type() -> None:
         "include_real_images": True,
     }
     validate_config(config)
-
-
-# ------------------------------------------------------ 6. audited-manifest gating
 
 
 def test_verify_refuses_a_manifest_that_changed_since_it_was_audited(tmp_path: Path) -> None:

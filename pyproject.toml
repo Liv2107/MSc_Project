@@ -1,7 +1,3 @@
-# Centralise development-tool settings so formatting, linting, typing, and tests use
-# the same rules on every machine. This is not a dependency lock file and does not
-# claim the project is packaged for release yet.
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

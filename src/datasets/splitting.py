@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .schema import FAKE_LABEL, DatasetRecord
+from .schema import DatasetRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,57 +106,6 @@ def create_grouped_splits(
             "insufficient independent source groups to populate splits: "
             + ", ".join(missing_splits)
         )
-    return assignments
-
-
-def create_unseen_generator_partitions(
-    records: Sequence[DatasetRecord],
-    *,
-    unseen_generator: str,
-    adaptation_fraction: float,
-    seed: int,
-) -> list[SplitAssignment]:
-    if not unseen_generator or unseen_generator == "real":
-        raise ValueError("unseen_generator must name a fake generator")
-    if not 0 < adaptation_fraction < 1:
-        raise ValueError("adaptation_fraction must be in (0, 1)")
-    groups = _validated_groups(records)
-    unseen_groups: list[tuple[str, list[DatasetRecord]]] = []
-    found = False
-    for group_id, members in groups.items():
-        flags = {m.generator == unseen_generator and m.label == FAKE_LABEL for m in members}
-        if len(flags) > 1:
-            raise ValueError(f"source group {group_id!r} mixes unseen and development samples")
-        if True in flags:
-            unseen_groups.append((group_id, members))
-            found = True
-    if not found:
-        raise ValueError(f"unseen generator not present: {unseen_generator}")
-    if len(unseen_groups) < 2:
-        raise ValueError("unseen generator needs at least two independent source groups")
-
-    random.Random(seed).shuffle(unseen_groups)
-    target = sum(len(m) for _, m in unseen_groups) * adaptation_fraction
-    running = 0
-    adaptation_ids: set[str] = set()
-    for index, (group_id, members) in enumerate(unseen_groups):
-        groups_left = len(unseen_groups) - index
-        if running < target and groups_left > 1:
-            adaptation_ids.add(group_id)
-            running += len(members)
-    if not adaptation_ids:
-        adaptation_ids.add(unseen_groups[0][0])
-    if len(adaptation_ids) == len(unseen_groups):
-        adaptation_ids.remove(unseen_groups[-1][0])
-
-    assignments: list[SplitAssignment] = []
-    for record in records:
-        group_id = record.source_group or f"sample:{record.sample_id}"
-        if any(group_id == item[0] for item in unseen_groups):
-            split = "adaptation_pool" if group_id in adaptation_ids else "unseen_test"
-        else:
-            split = "development"
-        assignments.append(SplitAssignment(record.sample_id, split, record.source_group))
     return assignments
 
 

@@ -1,27 +1,4 @@
-"""Consolidate every reported experimental cell into one machine-readable summary.
-
-Read-only with respect to ``outputs/``. Nothing here trains, infers, or edits a saved
-artefact: every number is copied from a completed run's own saved metrics file, so the
-summary cannot disagree with the run directories it describes.
-
-Three tables are written:
-
-* ``final_results_summary.csv`` -- one row per (run, evaluation set, cell) at the
-  project-wide default 0.5 threshold. This is the table the Results chapter is built
-  from.
-* ``final_results_by_threshold.csv`` -- the same cells at every operating point a run
-  recorded (default, its development-validation-selected threshold, and for adapted
-  cells the adaptation-selected threshold). Threshold-free metrics repeat by design.
-* ``final_results_summary.json`` -- both tables plus the provenance block: run
-  inventory, manifest digests, checkpoint digests, and what is deliberately absent.
-
-Rows carry ``row_role``: ``primary`` for the cell a dissertation table should cite, and
-``reproduction`` where a second run scored the identical cell (the head-only budgets
-appear in both the standalone recovery run and the depth ablation, and agree exactly).
-
-Usage:
-    python -m scripts.build_final_results_summary
-"""
+"""Consolidate every reported experimental cell into one machine-readable summary."""
 
 from __future__ import annotations
 
@@ -33,14 +10,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-#: Written alongside the exports, because ``outputs/report/`` is documented as
-#: safe to delete and regenerate. Kept as a template file so its markdown tables
-#: are not subject to the source line-length rule.
 FINAL_RESULTS_README_TEMPLATE = (
     Path(__file__).with_name("report_readmes") / "final_results.md"
 )
 
-#: Runs excluded from the summary, with the reason recorded rather than implied.
 EXCLUDED_RUNS = {
     "unseen_generator-20260808T144550443491Z-b386ea5c10-bb06": "synthetic smoke run",
     "fine_tuning-20260808T144640138049Z-6ec6cf50a2-f38d": "synthetic smoke run",
@@ -136,7 +109,6 @@ def _seed(run_dir: Path) -> int | None:
 
 def _logged_selection_counts(run_dir: Path) -> dict[str, int]:
     """Recover the development selection sizes the run logged when it built them."""
-
     log = run_dir / "run.log"
     if not log.is_file():
         return {}
@@ -309,8 +281,6 @@ def _cell_rows(
             "fine_tune_strategy": str(cell["fine_tune_mode"]),
             "development_training_samples": None,
             "recovery_labelled_images_total": int(cell["labelled_images_consumed"]),
-            # The earliest recovery run predates the per-class breakdown; it is left
-            # blank rather than back-inferred, and the run is flagged in the notes.
             "recovery_labelled_fake_images": (
                 int(cell["held_out_fake_count"])
                 if cell.get("held_out_fake_count") is not None
@@ -464,22 +434,7 @@ BUILDERS = {
 
 
 def _mark_reproductions(rows: Sequence[dict[str, Any]]) -> None:
-    """Flag a cell already reported by another run as a reproduction, not a new result.
-
-    Two conditions are scored by more than one run. The zero-labelled point belongs to
-    the leave-one-generator-out run and is copied into the recovery and ablation grids as
-    their reference cell. The head-only budgets were run twice -- once standalone, once
-    inside the depth ablation -- and agree exactly. Every row is kept so the agreement is
-    visible, but only one is marked ``primary`` so a table built from
-    ``row_role == "primary"`` cannot double-count a condition.
-
-    Canonical source per condition, matching how the runs are reported: the
-    leave-one-generator-out run owns the zero-labelled point, and the depth ablation owns
-    every adapted cell because it holds all three depths in one grid. This is the same
-    direction ``reproduction_checks.csv`` uses when it checks the standalone recovery run
-    against the ablation.
-    """
-
+    """Flag a cell already reported by another run as a reproduction, not a new result."""
     seen: dict[tuple[Any, ...], dict[str, Any]] = {}
     priority = {"unseen_generator": 0, "ablation": 1, "fine_tuning": 2}
     order = sorted(

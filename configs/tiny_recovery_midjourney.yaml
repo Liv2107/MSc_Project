@@ -1,10 +1,5 @@
-# Limited-data recovery on Tiny GenImage for held-out midjourney.
-# First pass: 1 subset seed x 1 training seed x 4 budgets = 4 adaptation cells, plus the
-# 0% reference recomputed in-run = 5 reported points.
-#
-# BEFORE RUNNING: set fine_tuning.starting_checkpoint to the best_checkpoint.pt written
-# by configs/tiny_unseen_midjourney.yaml. The runner refuses a checkpoint that held out a
-# different generator, or used a different CLIP revision or known-generator set.
+# Head-only recovery for held-out midjourney, with four adaptation budgets.
+# Set starting_checkpoint to the matching unseen run before running.
 
 base_config: tiny_genimage_base.yaml
 

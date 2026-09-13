@@ -1,14 +1,4 @@
-"""Aggregation contracts: provenance, honest gaps, and comparable operating points.
-
-The consolidated tables are what a dissertation chapter is written from, so these tests
-check the properties that would otherwise put a wrong number in a thesis: a smoke run
-must not be aggregated as a result, an unmeasured quantity must stay undefined rather
-than becoming zero, every row must name the file it came from, and a threshold-dependent
-metric must never be compared against a reference measured at a different threshold.
-
-All fixtures are synthetic run directories built in ``tmp_path``. Nothing here reads the
-real ``outputs/`` tree, so the suite stays deterministic and CPU-only.
-"""
+"""Aggregation contracts: provenance, honest gaps, and comparable operating points."""
 
 from __future__ import annotations
 
@@ -74,7 +64,6 @@ def make_run(
     head_type: str | None = None,
 ) -> Path:
     """Write a minimal but structurally faithful run directory."""
-
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
     config: dict[str, Any] = {
@@ -150,9 +139,7 @@ def recovery_cell(
     seed: int = 42,
     starting_run: str = "unseen_generator-20260102T000000000000Z-bbbb-0002",
 ) -> dict[str, Any]:
-    """One adaptation cell. ``starting_run`` names the unseen run whose checkpoint it
-    reloaded, because that path is what links a recovery curve to its own ceiling."""
-
+    """One adaptation cell. ``starting_run`` names the unseen run whose checkpoint it"""
     return {
         "cell_id": f"{mode}_p{int(percentage * 100):02d}_s{seed}",
         "fine_tune_mode": mode if percentage > 0 else "none",
@@ -195,7 +182,6 @@ def recovery_metrics(cells: list[dict[str, Any]]) -> dict[str, Any]:
 @pytest.fixture
 def study(tmp_path: Path) -> Path:
     """A small but complete study: baseline, unseen, recovery, a smoke run, a failure."""
-
     root = tmp_path / "outputs"
     root.mkdir()
     make_run(
@@ -244,7 +230,6 @@ def study(tmp_path: Path) -> Path:
         status="failed",
         unseen="biggan",
     )
-    # An interrupted grid: no status.json at all, which is what a killed run leaves.
     make_run(
         root,
         "ablation-20260106T000000000000Z-ffff-0006",
@@ -255,22 +240,15 @@ def study(tmp_path: Path) -> Path:
     return root
 
 
-# ------------------------------------------------------------------------------ discovery
-
-
 def test_discovery_reports_every_run_and_its_true_status(study: Path) -> None:
     records = discover_runs(study)
     by_id = {record.run_id: record for record in records}
     assert len(records) == 6
 
-    # A missing status.json is an interruption, not a recorded failure. Conflating the
-    # two would hide a grid that never finished.
     assert by_id["ablation-20260106T000000000000Z-ffff-0006"].status == "incomplete"
     assert by_id["unseen_generator-20260105T000000000000Z-eeee-0005"].status == "failed"
     assert by_id["baseline-20260101T000000000000Z-aaaa-0001"].status == "completed"
 
-    # Oldest first by run timestamp, so a reader can follow the study in the order it
-    # happened rather than in whatever order the filesystem returns.
     starts = [record.started_at for record in records]
     assert starts == sorted(start for start in starts if start is not None)
     assert records[0].experiment_type == "baseline"
@@ -309,7 +287,6 @@ def test_synthetic_smoke_runs_are_excluded_unless_opted_into(study: Path) -> Non
 
     opted_in = reportable_runs(records, include_synthetic_smoke=True)
     assert len(opted_in) == 4
-    # Even when included, the rows must still say what they are.
     assert any(record.is_synthetic_smoke for record in opted_in)
 
 
@@ -319,9 +296,6 @@ def test_loading_metrics_from_a_run_without_them_raises(study: Path) -> None:
     assert record.has_metrics is False
     with pytest.raises(FileNotFoundError, match="unseen_generator_metrics.json"):
         load_metrics(record)
-
-
-# -------------------------------------------------------------------------- consolidation
 
 
 def test_every_consolidated_row_names_its_source_file_and_digest(study: Path) -> None:
@@ -334,8 +308,6 @@ def test_every_consolidated_row_names_its_source_file_and_digest(study: Path) ->
             "unseen_generator_metrics.json",
             "recovery_metrics.json",
         }
-        # Traceability is the whole point: a plotted number a reader cannot verify
-        # against a hashed artefact is not evidence.
         assert row["source_sha256"] == "deadbeef"
         assert set(row) == set(CONSOLIDATED_COLUMNS)
 
@@ -343,7 +315,6 @@ def test_every_consolidated_row_names_its_source_file_and_digest(study: Path) ->
 def test_prevalence_is_derived_from_saved_counts(study: Path) -> None:
     rows = consolidate_runs(reportable_runs(discover_runs(study)))
     row = next(row for row in rows if row["experiment_type"] == "baseline")
-    # 40 true positives + 10 false negatives out of 100 samples.
     assert row["support"] == 100
     assert row["positive_prevalence"] == pytest.approx(0.5)
 
@@ -355,8 +326,6 @@ def test_undefined_metrics_stay_undefined_rather_than_becoming_zero(study: Path)
         for row in rows
         if row["experiment_type"] == "baseline" and row["generator"] == "real"
     )
-    # A single-class slice has no ROC-AUC. Zero would read as "very bad" rather than
-    # "not measurable", and would drag any mean computed over the column.
     assert real["roc_auc"] is None
     assert real["average_precision"] is None
 
@@ -375,8 +344,6 @@ def test_each_cell_is_reported_at_every_saved_operating_point(study: Path) -> No
         "adaptation_selected",
         "baseline_unchanged",
     }
-    # Threshold-free metrics must be identical across operating points; only the
-    # threshold-dependent ones may move.
     assert len({row["roc_auc"] for row in adapted}) == 1
     assert len({row["f1"] for row in adapted}) == 3
 
@@ -396,7 +363,6 @@ def test_trainable_parameter_fraction_is_derived_only_when_both_counts_exist(
         row for row in rows if row["experiment_type"] == "fine_tuning"
         and row["adaptation_percentage"] == 0.0 and row["operating_point"] == "default"
     )
-    # Nothing was fitted at 0%, so there is no trainable-parameter count to report.
     assert zero["trainable_parameters"] is None
     assert zero["trainable_parameter_fraction"] is None
 
@@ -414,9 +380,6 @@ def test_run_summary_counts_conditions_and_keeps_failed_runs_visible(study: Path
     assert by_id["baseline-20260101T000000000000Z-aaaa-0001"]["torch"] == "2.13.0"
 
 
-# ------------------------------------------------------------------------------ recovery
-
-
 def test_recovery_is_measured_against_the_zero_percent_row(study: Path) -> None:
     records = reportable_runs(discover_runs(study))
     rows = consolidate_runs(records)
@@ -432,7 +395,6 @@ def test_recovery_is_measured_against_the_zero_percent_row(study: Path) -> None:
     assert entry["zero_percent_reference"] == pytest.approx(0.90)
     assert entry["absolute_recovery"] == pytest.approx(0.04)
     assert entry["relative_improvement"] == pytest.approx(0.04 / 0.90)
-    # The 0% condition is the reference, not a recovery result of its own.
     assert all(row["adaptation_percentage"] != 0.0 for row in summary)
 
 
@@ -444,7 +406,6 @@ def test_a_single_run_reports_unmeasured_spread_rather_than_zero_uncertainty(
     entry = next(row for row in summary if row["metric"] == "f1")
     assert entry["runs"] == 1
     assert entry["standard_deviation"] == 0.0
-    # A standard error of 0.0 would claim a precision one run cannot support.
     assert entry["standard_error"] is None
 
 
@@ -482,7 +443,6 @@ def test_gap_closed_is_flagged_unreliable_when_the_measured_gap_is_tiny(
 ) -> None:
     root = tmp_path / "outputs"
     root.mkdir()
-    # An in-distribution/unseen gap far below the reliability threshold.
     tiny = unseen_metrics(in_distribution_f1=0.805, unseen_f1=0.80)
     assert MINIMUM_RELIABLE_GAP > 0.805 - 0.80
     origin = "unseen_generator-20260101T000000000000Z-aaaa-0001"
@@ -511,8 +471,6 @@ def test_gap_closed_is_flagged_unreliable_when_the_measured_gap_is_tiny(
         row for row in summary if row["metric"] == "f1" and row["operating_point"] == "default"
     )
     assert entry["generalisation_gap"] == pytest.approx(0.005, abs=1e-9)
-    # The fraction is still reported -- it is not fabricated or hidden -- but a reader is
-    # told the denominator cannot support the claim.
     assert entry["gap_closed_fraction"] is not None
     assert entry["gap_closed_is_reliable"] is False
 
@@ -528,14 +486,9 @@ def test_threshold_dependent_metrics_get_no_reference_at_a_shifted_operating_poi
         for row in summary
         if row["metric"] == "f1" and row["operating_point"] == "adaptation_selected"
     )
-    # The saved in-distribution reference was measured at the default threshold. Quoting
-    # it against an F1 at an adaptation-selected threshold would compare two operating
-    # points and call the difference a generalisation gap.
     assert shifted_f1["in_distribution_reference"] is None
     assert shifted_f1["generalisation_gap"] is None
     assert shifted_f1["gap_closed_fraction"] is None
-    # The threshold-free ranking metric is unaffected by the operating point, so it keeps
-    # its reference.
     shifted_auc = next(
         row
         for row in summary
@@ -567,7 +520,6 @@ def test_missing_unseen_run_leaves_the_reference_undefined(tmp_path: Path) -> No
 
     summary = summarise_recovery(consolidate_runs(records), records=records)
     entry = next(row for row in summary if row["metric"] == "roc_auc")
-    # Recovery against the 0% point is still measurable; only the ceiling is unknown.
     assert entry["absolute_recovery"] == pytest.approx(0.07)
     assert entry["in_distribution_reference"] is None
     assert entry["gap_closed_fraction"] is None
@@ -595,12 +547,8 @@ def test_the_reference_is_taken_from_the_matching_held_out_generator(tmp_path: P
     assert value == pytest.approx(0.90)
     assert run_id == "unseen_generator-20260101T000000000000Z-aaaa-0001"
     assert match == "held_out_generator"
-    # A reference must never be borrowed from a different held-out generator's run.
     other, _, _ = in_distribution_reference(records, "f1", held_out_generator="glide")
     assert other == pytest.approx(0.70)
-
-
-# --------------------------------------------------------------------------- degradation
 
 
 def test_degradation_pairs_the_two_sides_at_one_operating_point(study: Path) -> None:
@@ -625,9 +573,6 @@ def test_degradation_leaves_the_drop_undefined_when_one_side_is_missing(study: P
         for row in degradation_rows(rows)
         if row["operating_point"] == "validation_selected" and row["metric"] == "f1"
     )
-    # The fixture never evaluated in-distribution at the selected threshold, so there is
-    # nothing to subtract from. Substituting the default-threshold value would report a
-    # threshold change as a generalisation gap.
     assert entry["unseen"] is not None
     assert entry["in_distribution"] is None
     assert entry["absolute_drop"] is None
@@ -643,11 +588,7 @@ def test_degradation_ignores_runs_that_measured_only_one_side(tmp_path: Path) ->
         metrics={"overall": metric_block(), "per_generator": {}},
     )
     rows = consolidate_runs(reportable_runs(discover_runs(root)))
-    # A baseline measured no held-out generator, so it contributes no degradation row.
     assert degradation_rows(rows) == []
-
-
-# -------------------------------------------------------------------------------- output
 
 
 def test_written_table_uses_the_declared_schema(tmp_path: Path) -> None:
@@ -656,7 +597,6 @@ def test_written_table_uses_the_declared_schema(tmp_path: Path) -> None:
     )
     lines = destination.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "a,b,c"
-    # A missing value is an empty cell, never a zero and never a placeholder number.
     assert lines[1] == "1,,"
 
 
@@ -682,20 +622,10 @@ def test_run_record_reportability_requires_completion_metrics_and_non_smoke() ->
     assert not RunRecord(**base, status="failed", is_synthetic_smoke=False).is_reportable
 
 
-# ------------------------------------------------- reference provenance and head type
-
-
 def test_the_reference_comes_from_the_run_whose_checkpoint_was_adapted(
     tmp_path: Path,
 ) -> None:
-    """Two runs hold out the SAME generator under different heads.
-
-    This is the real configuration of this project (``configs/tiny_unseen_vqdm.yaml``
-    against ``configs/tiny_unseen_vqdm_cosine.yaml``). Matching on the generator alone
-    and taking the newest run would quote the cosine model's in-distribution ceiling
-    against a recovery curve fitted from the linear model's checkpoint.
-    """
-
+    """Two runs hold out the SAME generator under different heads."""
     root = tmp_path / "outputs"
     root.mkdir()
     linear = "unseen_generator-20260101T000000000000Z-aaaa-0001"
@@ -741,7 +671,6 @@ def test_a_starting_checkpoint_no_run_owns_leaves_the_reference_undefined(
     tmp_path: Path,
 ) -> None:
     """A dangling checkpoint path must not fall back to another model's ceiling."""
-
     root = tmp_path / "outputs"
     root.mkdir()
     make_run(
@@ -766,7 +695,6 @@ def test_a_starting_checkpoint_no_run_owns_leaves_the_reference_undefined(
     records = reportable_runs(discover_runs(root))
     summary = summarise_recovery(consolidate_runs(records), records=records)
     entry = next(row for row in summary if row["metric"] == "roc_auc")
-    # The recovery against the run's own 0% point is still measurable.
     assert entry["absolute_recovery"] == pytest.approx(0.06)
     assert entry["in_distribution_reference"] is None
     assert entry["in_distribution_reference_match"] is None
@@ -794,6 +722,5 @@ def test_head_type_is_recorded_and_defaults_to_linear_for_older_runs(tmp_path: P
     assert [record.head_type for record in records] == ["linear", "cosine"]
     rows = consolidate_runs(records)
     assert {row["head_type"] for row in rows} == {"linear", "cosine"}
-    # The two arms of a single-factor comparison must be separable in the tidy table.
     assert {row["head_type"] for row in degradation_rows(rows)} == {"linear", "cosine"}
     assert {row["head_type"] for row in summarise_runs(records, rows)} == {"linear", "cosine"}

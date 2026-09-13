@@ -1,16 +1,4 @@
-"""Plotting interfaces built from evaluated data.
-
-Figures are deterministic views of saved predictions and history, never a place where
-metrics are quietly recalculated under different conventions.
-
-No function calls ``show``, writes a file, or mutates global Matplotlib state; each
-returns ``(Figure, Axes)`` for the caller to place. Metrics arrive already computed, so
-a figure can always be traced back to a prediction table. Undefined values, such as a
-one-class ROC-AUC, are omitted and annotated rather than drawn as zero, which would read
-as "very bad" instead of "not measurable". Axes covering a metric in [0, 1] use the full
-range so a recovery curve cannot be exaggerated by cropping, and sample support is shown
-wherever unequal support could mislead.
-"""
+"""Plotting interfaces built from evaluated data."""
 
 from __future__ import annotations
 
@@ -23,16 +11,15 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
-# Colour-blind-safe qualitative palette (Okabe-Ito), used consistently across figures.
 PALETTE = (
-    "#0072B2",  # blue
-    "#D55E00",  # vermillion
-    "#009E73",  # green
-    "#CC79A7",  # purple
-    "#E69F00",  # orange
-    "#56B4E9",  # sky blue
-    "#F0E442",  # yellow
-    "#000000",  # black
+    "#0072B2",
+    "#D55E00",
+    "#009E73",
+    "#CC79A7",
+    "#E69F00",
+    "#56B4E9",
+    "#F0E442",
+    "#000000",
 )
 REAL_COLOUR = "#0072B2"
 FAKE_COLOUR = "#D55E00"
@@ -46,7 +33,6 @@ FINE_TUNE_MODE_COLOURS = {
 
 def _new_figure(*, width: float = 6.4, height: float = 4.4) -> tuple[Figure, Axes]:
     """Create an isolated figure so no global style is touched."""
-
     figure = Figure(figsize=(width, height), dpi=150, layout="constrained")
     axes = figure.add_subplot(1, 1, 1)
     axes.spines["top"].set_visible(False)
@@ -61,13 +47,7 @@ def _colour_for(index: int) -> str:
 def plot_confusion_matrix(
     matrix: object, *, normalize: bool = False, title: str | None = None
 ) -> tuple[Figure, Axes]:
-    """Visualise fixed-order [[TN, FP], [FN, TP]] counts or rates.
-
-    ``normalize`` divides by ROW totals, i.e. each row shows the rate within one true
-    class. Rows with zero support are drawn as undefined rather than as zero, and the
-    normalisation choice is written into the colour-bar label so no reader has to guess.
-    """
-
+    """Visualise fixed-order [[TN, FP], [FN, TP]] counts or rates."""
     array = np.asarray(matrix)
     if array.shape != (2, 2):
         raise ValueError(f"confusion matrix must be 2x2; received {array.shape}")
@@ -118,7 +98,6 @@ def plot_confusion_matrix(
 
 def _curve_arrays(curve: object) -> tuple[np.ndarray, np.ndarray]:
     """Accept a CurveData-like object or an (x, y) pair."""
-
     x = getattr(curve, "x", None)
     y = getattr(curve, "y", None)
     if x is None or y is None:
@@ -141,13 +120,7 @@ def plot_roc_curves(
     areas: Mapping[str, float | None] | None = None,
     supports: Mapping[str, int] | None = None,
 ) -> tuple[Figure, Axes]:
-    """Compare ROC curves with AUC and a chance diagonal.
-
-    ``areas`` and ``supports`` are supplied by the caller from already-computed metrics;
-    nothing is integrated here. An entry whose area is ``None`` is labelled as undefined
-    (a single-class slice) rather than being drawn as if it scored zero.
-    """
-
+    """Compare ROC curves with AUC and a chance diagonal."""
     if not curves:
         raise ValueError("at least one ROC curve is required")
     figure, axes = _new_figure()
@@ -178,14 +151,7 @@ def plot_precision_recall_curves(
     average_precisions: Mapping[str, float | None] | None = None,
     supports: Mapping[str, int] | None = None,
 ) -> tuple[Figure, Axes]:
-    """Compare PR curves against the positive-class prevalence baseline.
-
-    Curves are expected as (recall, precision), matching
-    ``metrics.precision_recall_curve_data``. Labels report average precision, which is
-    the step-wise summary actually computed, and never call it an area under a
-    trapezoidally interpolated curve.
-    """
-
+    """Compare PR curves against the positive-class prevalence baseline."""
     if not curves:
         raise ValueError("at least one precision-recall curve is required")
     if not math.isfinite(prevalence) or not 0 <= prevalence <= 1:
@@ -223,15 +189,7 @@ def plot_precision_recall_curves(
 def plot_generator_performance(
     rows: Sequence[Mapping[str, Any]], *, metric_name: str
 ) -> tuple[Figure, Axes]:
-    """Show per-generator performance without hiding unequal support.
-
-    Each row needs ``generator`` and ``support``, plus the named metric. Repeated seeds
-    are drawn as individual points beside the mean, so a generator measured once is
-    visibly different from one measured three times. Rows whose metric is ``None`` are
-    listed as undefined instead of plotted at zero. Sorted by mean metric, ascending,
-    so the weakest generator reads first.
-    """
-
+    """Show per-generator performance without hiding unequal support."""
     if not rows:
         raise ValueError("at least one generator row is required")
     grouped: dict[str, list[Mapping[str, Any]]] = {}
@@ -307,15 +265,7 @@ def plot_training_curves(
     metric_name: str = "f1",
     best_epoch: int | None = None,
 ) -> tuple[Figure, Axes]:
-    """Plot train/validation loss and declared metrics across epochs.
-
-    Expects tidy rows as written to ``train_history.csv``: one row per epoch and split,
-    with ``epoch``, ``split``, ``loss``, and metric columns. Loss and the selection
-    metric are drawn on twinned axes so neither scale hides the other, and the
-    validation-selected epoch is marked because that, not the final epoch, is the model
-    the results come from.
-    """
-
+    """Plot train/validation loss and declared metrics across epochs."""
     if not history_rows:
         raise ValueError("training history is empty")
     ordered = sorted(history_rows, key=lambda row: (int(row["epoch"]), str(row["split"])))
@@ -366,18 +316,7 @@ def plot_training_curves(
 def plot_fine_tuning_recovery(
     result_rows: Sequence[Mapping[str, Any]], *, metric_name: str = "f1"
 ) -> tuple[Figure, Axes]:
-    """Plot performance against labelled adaptation-data percentage.
-
-    Expects the per-cell rows saved by the recovery and ablation runners: each with
-    ``adaptation_percentage``, ``fine_tune_mode``, ``labelled_images_consumed``, and the
-    metric. The 0% row is required, because a recovery curve without its starting point
-    invites reading the y-axis as absolute skill rather than as recovery.
-
-    Repeated subset/training seeds are shown as raw scatter points alongside the mean,
-    with a mean +/- one standard deviation band drawn only where at least three runs
-    exist. Below that, a band would imply a precision the data cannot support.
-    """
-
+    """Plot performance against labelled adaptation-data percentage."""
     if not result_rows:
         raise ValueError("at least one recovery row is required")
     for row in result_rows:
@@ -474,27 +413,15 @@ def plot_fine_tuning_recovery(
     for percentage in percentages_present:
         total = _range_text(counts_by_percentage.get(percentage, set()))
         held_out = _range_text(held_out_by_percentage.get(percentage, set()))
-        # The adaptation pool mixes held-out-generator images with shared authentic ones,
-        # so a bare "n=" beside a percentage invites reading the mixed total as the number
-        # of new-generator images. Name both when both are known.
         if held_out is not None and total is not None:
-            # Compact "held-out / total": the budgets sit close together on a linear axis
-            # (5% and 10% especially), so a spelled-out label collides with its neighbour.
-            # The axis label below carries the full explanation of both counts.
             tick_labels.append(f"{percentage * 100:g}%\n{held_out} / {total}")
         elif total is not None:
             tick_labels.append(f"{percentage * 100:g}%\n(n={total})")
         else:
             tick_labels.append(f"{percentage * 100:g}%")
-    # Smaller than the default: the lowest budgets sit close together on a linear axis,
-    # so full-size two-line tick labels touch their neighbour.
     axes.set_xticks(tick_positions, labels=tick_labels, fontsize=8)
-    # Keep the axis inside the observed budgets so no trend is implied beyond them.
     axes.set_xlim(min(tick_positions) - 2, max(tick_positions) + 2)
     axes.set_ylim(0.0, 1.0)
-    # The axis label must describe exactly what the ticks show. Runs recorded before the
-    # per-class counts existed only carry the mixed total, and claiming otherwise would
-    # invite reading that total as a count of new-generator images.
     if held_out_by_percentage:
         axis_label = (
             "Labelled adaptation budget (% of adaptation pool)\n"
@@ -533,19 +460,7 @@ def plot_generalisation_degradation(
     operating_point: str = "default",
     title: str | None = None,
 ) -> tuple[Figure, Axes]:
-    """Contrast in-distribution and held-out-generator performance, metric by metric.
-
-    Expects the rows produced by ``src.evaluation.aggregation.degradation_rows``: each
-    with ``held_out_generator``, ``metric``, ``in_distribution``, ``unseen``, and
-    ``operating_point``. Only rows at the requested operating point are drawn, because a
-    threshold-dependent metric measured at two different thresholds is not a comparison.
-
-    The drop is annotated above each pair rather than left for the reader to subtract,
-    and the axis spans the full [0, 1] range so a small degradation cannot be made to
-    look dramatic by cropping. Pairs where either side is undefined are listed as
-    undefined instead of being drawn against an implied zero.
-    """
-
+    """Contrast in-distribution and held-out-generator performance, metric by metric."""
     if not rows:
         raise ValueError("at least one degradation row is required")
     selected = [row for row in rows if str(row.get("operating_point")) == operating_point]
@@ -619,9 +534,6 @@ def plot_generalisation_degradation(
     axes.set_xlabel(f"Metric (operating point: {operating_point})")
     subject = ", ".join(sorted(generators))
     axes.set_title(title or f"Degradation on the held-out generator ({subject})")
-    # Bars fill the axes from zero, so the legend goes outside them. A figure-level
-    # legend is placed by the layout engine, which keeps it clear of the x-axis label
-    # however many lines the tick labels need.
     handles, labels = axes.get_legend_handles_labels()
     figure.legend(handles, labels, loc="outside lower center", ncol=2, fontsize=8, frameon=False)
     if undefined:
@@ -643,20 +555,7 @@ def plot_parameter_efficiency(
     zero_percent_reference: float | None = None,
     title: str | None = None,
 ) -> tuple[Figure, Axes]:
-    """Plot performance against the number of parameters each depth actually trained.
-
-    Expects adapted-cell rows carrying ``trainable_parameters``, ``fine_tune_mode``,
-    ``adaptation_percentage``, and the named metric. The parameter axis is logarithmic
-    because the depths under comparison differ by orders of magnitude -- a linear axis
-    would collapse head-only and last-block onto the same tick and hide the trade-off
-    the figure exists to show.
-
-    Marker area grows with the labelled budget, so a point that only looks good because
-    it was given far more data is visibly larger. Passing ``zero_percent_reference``
-    draws the unadapted starting point, without which the vertical axis reads as
-    absolute skill rather than as what adaptation bought.
-    """
-
+    """Plot performance against the number of parameters each depth actually trained."""
     if not rows:
         raise ValueError("at least one cell row is required")
     usable = [
@@ -700,11 +599,6 @@ def plot_parameter_efficiency(
             zorder=3,
             label=mode,
         )
-        # Every budget of one depth trains the same parameters, so those points share an
-        # x position and their labels would print on top of each other. Stack the labels
-        # instead of jittering the points, which would put them at counts they do not
-        # have. Stack away from the nearer axis limit so the column cannot run off the
-        # top of the figure and over the title.
         by_position: dict[int, list[Mapping[str, Any]]] = {}
         for row in mode_rows:
             by_position.setdefault(int(row["trainable_parameters"]), []).append(row)
@@ -728,8 +622,6 @@ def plot_parameter_efficiency(
     axes.set_ylabel(metric_name)
     axes.set_ylim(0.0, 1.0)
     axes.set_title(title or f"Parameter efficiency of adaptation ({metric_name})")
-    # One mode alone is a legitimate state of the study, but it is not a trade-off, and
-    # the figure must not imply that a comparison was made.
     if len(modes) == 1:
         axes.text(
             0.01,
@@ -754,18 +646,7 @@ def plot_threshold_response(
     default_threshold: float = 0.5,
     title: str | None = None,
 ) -> tuple[Figure, Axes]:
-    """Plot a threshold-dependent metric across the whole decision-threshold range.
-
-    ``series`` maps a label to ``(thresholds, values)`` as returned by
-    ``src.evaluation.metrics.threshold_sweep``. This is the figure that separates a
-    ranking difference from an operating-point difference: curves that peak at different
-    thresholds, or differ in flatness, share a ROC-AUC while disagreeing at a fixed
-    prior. The fixed 0.5 prior is drawn as a vertical rule, and any
-    ``reference_thresholds`` (for example each model's validation-selected value) are
-    marked on their own curve, so a reader can see both what was reported and what the
-    model would have achieved elsewhere.
-    """
-
+    """Plot a threshold-dependent metric across the whole decision-threshold range."""
     if not series:
         raise ValueError("at least one threshold-response series is required")
     figure, axes = _new_figure(width=7.2, height=4.6)
@@ -799,7 +680,6 @@ def plot_threshold_response(
     axes.set_xlabel("Decision threshold applied to the predicted probability")
     axes.set_ylabel(metric_name)
     axes.set_title(title or f"{metric_name} across the decision-threshold range")
-    # Curves sweep the full width, so the legend goes beneath the axes.
     axes.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, -0.14),
@@ -830,17 +710,7 @@ def plot_score_distributions(
     default_threshold: float = 0.5,
     title: str | None = None,
 ) -> tuple[Figure, Axes]:
-    """Show where each model places real and fake scores relative to the threshold.
-
-    ``panels`` is a sequence of ``(label, real_scores, fake_scores)``. The horizontal axis
-    is the log-odds of the predicted probability, because these detectors saturate: on a
-    linear probability axis almost every sample piles into the two end bins and the
-    figure shows nothing. Ticks are labelled with the probabilities they correspond to,
-    and the decision threshold is drawn as a vertical rule, so the quantity the reader
-    should take away -- how much of the fake mass sits on the wrong side of the threshold
-    -- is directly visible.
-    """
-
+    """Show where each model places real and fake scores relative to the threshold."""
     if not panels:
         raise ValueError("at least one score-distribution panel is required")
     figure = Figure(figsize=(7.2, 2.2 * len(panels) + 1.0), dpi=200, layout="constrained")
@@ -872,8 +742,6 @@ def plot_score_distributions(
         fontsize=7.5,
     )
     axes_list[-1].set_xlabel("Predicted probability of 'fake', on a log-odds axis")
-    # Histogram bars reach the top of each panel, so the class key sits under the whole
-    # figure rather than on top of the first panel's tallest bins.
     handles, labels = axes_list[0].get_legend_handles_labels()
     figure.legend(
         handles,
@@ -896,15 +764,7 @@ def plot_metric_by_depth_and_budget(
     title: str | None = None,
     y_label: str | None = None,
 ) -> tuple[Figure, Axes]:
-    """Grouped bars: one budget group per x tick, one bar per fine-tuning depth.
-
-    Expects adapted-cell rows with ``fine_tune_mode``, ``adaptation_percentage`` and the
-    named metric. Budgets are ordered ascending and depths shallow-to-deep, so the figure
-    reads left-to-right as "more data" and within a group as "more trainable parameters".
-    The axis spans the full [0, 1] metric range: these values sit close to 1.0 and a
-    cropped axis would turn a 0.01 difference into an apparently decisive one.
-    """
-
+    """Grouped bars: one budget group per x tick, one bar per fine-tuning depth."""
     usable = [
         row
         for row in rows
@@ -954,7 +814,6 @@ def plot_metric_by_depth_and_budget(
     axes.set_xlabel(f"Labelled adaptation budget   ({BUDGET_ORDER_NOTE})")
     axes.set_ylabel(y_label or metric_name)
     axes.set_title(title or f"{metric_name} by fine-tuning depth and adaptation budget")
-    # Bars fill the axes from zero, so an in-axes legend would cover the data.
     axes.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, -0.16),
@@ -973,15 +832,7 @@ def plot_validation_trajectories(
     selected_epochs: Mapping[str, int] | None = None,
     title: str | None = None,
 ) -> tuple[Figure, Axes]:
-    """Validation metric per epoch for a few named cells, on shared axes.
-
-    Built for comparing fine-tuning depths at one budget rather than for dumping every
-    cell's loss curve: it answers how quickly each depth reaches its best validation
-    score and whether deeper adaptation converges sooner. Only ``validation`` rows are
-    used, because training-split curves describe fit rather than generalisation, and the
-    selected epoch is marked because that checkpoint produced the reported result.
-    """
-
+    """Validation metric per epoch for a few named cells, on shared axes."""
     if not series:
         raise ValueError("at least one trajectory is required")
     figure, axes = _new_figure(width=7.0, height=4.4)
@@ -1024,19 +875,7 @@ STATUS_COLOURS = {
 def plot_experiment_roadmap(
     stages: Sequence[Mapping[str, Any]], *, title: str | None = None
 ) -> tuple[Figure, Axes]:
-    """Draw the experimental logic of the study as a status-annotated flow.
-
-    Each stage needs ``label``, ``status`` (``completed``/``pending``/``planned``) and an
-    optional ``detail`` line. This is a scientific workflow diagram, not an infographic:
-    stages are plain boxes in execution order, the only colour carries completion status,
-    and every ``detail`` string is supplied by the caller from real run artefacts rather
-    than written into the figure.
-
-    Its purpose is to make the argument visible -- that each experiment exists because
-    the previous one produced a specific result -- and to be explicit about which links
-    in that chain have not been measured yet.
-    """
-
+    """Draw the experimental logic of the study as a status-annotated flow."""
     if not stages:
         raise ValueError("at least one stage is required")
     unknown = sorted(
@@ -1110,27 +949,13 @@ def plot_embedding_norms(
     highlight: str | None = None,
     title: str | None = None,
 ) -> tuple[Figure, Axes]:
-    """Show the L2 norm of the frozen CLIP embedding for each generator.
-
-    This figure exists to TEST a premise rather than to report a result: the cosine head
-    was motivated by the idea that embedding magnitude varies between generators and can
-    therefore be exploited by an unnormalised linear head. If the distributions overlap,
-    that premise is not supported, and the figure says so by making the overlap plain.
-
-    ``highlight`` names the held-out generator so a reader can see immediately whether it
-    sits apart from the generators the detector was trained on.
-    """
-
+    """Show the L2 norm of the frozen CLIP embedding for each generator."""
     if not rows:
         raise ValueError("at least one generator row is required")
     ordered = sorted(rows, key=lambda row: float(row["mean_norm"]))
     positions = np.arange(len(ordered), dtype=np.float64)
     figure, axes = _new_figure(width=8.4, height=0.46 * len(ordered) + 2.4)
 
-    # The norms occupy a narrow band well away from zero. Without explicit limits the
-    # axis collapses every distribution onto one line, which would hide the very overlap
-    # this figure exists to show. A [0, max] axis would be equally uninformative here:
-    # the question is whether the groups separate FROM EACH OTHER, not their absolute size.
     lows = [float(row["min_norm"]) for row in ordered if row.get("min_norm") is not None]
     highs = [float(row["max_norm"]) for row in ordered if row.get("max_norm") is not None]
     if not lows or not highs:

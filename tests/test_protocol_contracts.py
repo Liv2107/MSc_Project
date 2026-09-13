@@ -1,9 +1,4 @@
-"""Leakage, budget, and control contracts for the unseen/recovery/ablation protocols.
-
-These tests guard the properties the dissertation's claims rest on: the held-out
-generator never reaches development data, adaptation budgets nest and stay disjoint
-from the final test partition, and the ablation cannot silently drop a control.
-"""
+"""Leakage, budget, and control contracts for the unseen/recovery/ablation protocols."""
 
 from __future__ import annotations
 
@@ -64,9 +59,6 @@ def base_config(**overrides: Any) -> dict[str, Any]:
     return config
 
 
-# --------------------------------------------------------------------------- unseen
-
-
 def test_unseen_protocol_requires_one_held_out_generator_absent_from_development() -> None:
     unseen, known = validate_unseen_protocol(base_config())
     assert unseen == "biggan"
@@ -108,7 +100,6 @@ def test_held_out_fakes_in_a_development_selection_are_rejected() -> None:
 
 def test_held_out_real_images_are_not_treated_as_leakage() -> None:
     """Real negatives are shared by design; only held-out FAKES constitute leakage."""
-
     selections = {"train": [record("r", 0, "real", "shared-real-group")]}
     assert_unseen_absent_from_development(selections, unseen_generator="biggan")
 
@@ -125,9 +116,6 @@ def test_adaptation_and_final_test_must_not_share_groups_or_samples() -> None:
         assert_pools_group_disjoint(same_id, other)
 
     assert_pools_group_disjoint([record("a", 1, "biggan", "g1")], [record("b", 1, "biggan", "g2")])
-
-
-# ------------------------------------------------------------------------- budgets
 
 
 def test_adaptation_pool_split_is_group_disjoint_and_keeps_both_classes() -> None:
@@ -163,7 +151,6 @@ def test_budgets_nest_and_every_budget_contains_both_classes() -> None:
         train = set(budget.train_sample_ids)
         validation = set(budget.validation_sample_ids)
         assert not train & validation
-        # The smallest budget must still be a two-class training problem.
         assert {by_id[identifier].label for identifier in train} == {0, 1}
         assert {by_id[identifier].label for identifier in validation} == {0, 1}
         if previous_train is not None:
@@ -257,9 +244,6 @@ def test_saved_subsets_round_trip_for_exact_reuse_by_the_ablation(tmp_path: Path
     assert json.loads(destination.read_text(encoding="utf-8"))["42"]["0.05"]["fraction"] == 0.05
 
 
-# ------------------------------------------------------------------------ ablation
-
-
 def test_ablation_controls_cannot_be_disabled() -> None:
     settings = {
         "ablation": {
@@ -324,9 +308,6 @@ def test_run_matrix_covers_the_declared_grid_exactly() -> None:
     assert "head_only_p05_s42_t7" in {entry["cell_id"] for entry in matrix}
 
 
-# ------------------------------------------------------------------------ summaries
-
-
 def cell(mode: str, fraction: float, f1: float, **extra: Any) -> dict[str, Any]:
     return {
         "fine_tune_mode": mode,
@@ -368,12 +349,8 @@ def test_mode_comparison_excludes_the_zero_percent_row() -> None:
     assert full["mean_training_seconds"] == pytest.approx(9.0)
 
 
-# ------------------------------------------------------- starting-checkpoint provenance
-
-
 def checkpoint_config(**model: Any) -> dict[str, Any]:
     """A checkpoint's stored resolved config, as ``load_checkpoint`` returns it."""
-
     return {
         "resolved_config": {
             "model": {
@@ -440,13 +417,7 @@ def test_adapting_a_checkpoint_trained_on_other_known_generators_is_refused() ->
 def test_a_checkpoint_from_the_other_classifier_head_is_refused(
     stored_head: str, expected_head: str
 ) -> None:
-    """Both heads name their parameters identically, so shapes alone do not catch this.
-
-    A cosine checkpoint adapted under a linear forward pass is not a continuation of the
-    cosine model's 0%-adaptation result, so the recovery curve would be measured from an
-    origin that was never evaluated.
-    """
-
+    """Both heads name their parameters identically, so shapes alone do not catch this."""
     with pytest.raises(ValueError, match="classifier head"):
         assert_starting_checkpoint_compatible(
             checkpoint_config(head_type=stored_head),
@@ -458,9 +429,7 @@ def test_a_checkpoint_from_the_other_classifier_head_is_refused(
 
 
 def test_a_checkpoint_predating_head_type_counts_as_the_linear_head() -> None:
-    """Runs saved before the head became configurable used the linear head, so their
-    stored config has no ``head_type`` and must still adapt under the linear default."""
-
+    """Runs saved before the head became configurable used the linear head, so their"""
     findings = assert_starting_checkpoint_compatible(
         checkpoint_config(),
         adapting_config(),

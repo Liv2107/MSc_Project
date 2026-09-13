@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import logging
-from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
 
 from src.datasets.detector_dataset import AIDetectionDataset
-from src.datasets.schema import DatasetRecord
 from src.datasets.splitting import load_split_assignments
 from src.evaluation.evaluator import collect_predictions, save_predictions
 from src.evaluation.metrics import compute_binary_metrics, per_generator_metrics
@@ -20,6 +16,8 @@ from src.experiments.common import (
     build_transforms,
     finalise_run,
     prepare_experiment,
+    resolve_runtime_paths,
+    select_records,
 )
 from src.models.checkpointing import load_checkpoint
 from src.models.clip_detector import (
@@ -39,62 +37,12 @@ from src.training.engine import fit
 from src.utils.config import load_config
 
 
-def _select_records(
-    records: Sequence[DatasetRecord],
-    assignments: Mapping[str, str],
-    *,
-    split: str,
-    fake_generators: Sequence[str],
-    include_real: bool,
-) -> list[DatasetRecord]:
-    allowed = set(fake_generators)
-    selected = [
-        record
-        for record in records
-        if assignments[record.sample_id] == split
-        and (
-            (record.label == 1 and record.generator in allowed)
-            or (record.label == 0 and include_real)
-        )
-    ]
-    labels = {record.label for record in selected}
-    if labels != {0, 1}:
-        raise ValueError(
-            f"{split} selection must contain both real and fake images; found {labels}"
-        )
-    return selected
-
-
-def _resolve_runtime_paths(values: Mapping[str, Any], source_path: Path) -> dict[str, Any]:
-    resolved = copy.deepcopy(dict(values))
-    project_root = source_path.parent.parent
-    resolved["project"]["output_root"] = str(
-        (project_root / values["project"]["output_root"]).resolve()
-    )
-    resolved["project"]["checkpoint_root"] = str(
-        (project_root / values["project"]["checkpoint_root"]).resolve()
-    )
-    resolved["data"]["root"] = str((project_root / values["data"]["root"]).resolve())
-    resolved["data"]["manifest_path"] = str(
-        (project_root / values["data"]["manifest_path"]).resolve()
-    )
-    resolved["data"]["split_path"] = str((project_root / values["data"]["split_path"]).resolve())
-    return resolved
-
-
 def run_baseline(config_path: Path, *, resume_from: Path | None = None) -> Path:
-    """Train and evaluate the in-distribution reference.
-
-    ``resume_from`` names the output directory of an interrupted run of this same
-    config; training then continues from its last completed epoch instead of starting
-    over. Everything after training -- test scoring, metrics, finalisation -- is
-    unchanged, because it depends only on the selected checkpoint.
-    """
-
+    """Train and evaluate the in-distribution reference."""
     loaded = load_config(config_path)
     if loaded.values["experiment"]["type"] != "baseline":
         raise ValueError("run_baseline requires experiment.type=baseline")
-    config = _resolve_runtime_paths(loaded.values, loaded.source_path)
+    config = resolve_runtime_paths(loaded.values, loaded.source_path)
     context = prepare_experiment(config, resume_run_dir=resume_from)
     logger = logging.getLogger(f"ai_detector.{context.run_id}")
     try:
@@ -123,21 +71,21 @@ def run_baseline(config_path: Path, *, resume_from: Path | None = None) -> Path:
             raise ValueError(f"source groups cross split boundaries: {leaked[:10]}")
 
         include_real = bool(config["generators"].get("include_real_images", True))
-        train_records = _select_records(
+        train_records = select_records(
             full_dataset.records,
             split_by_id,
             split="train",
             fake_generators=config["generators"]["train"],
             include_real=include_real,
         )
-        validation_records = _select_records(
+        validation_records = select_records(
             full_dataset.records,
             split_by_id,
             split="validation",
             fake_generators=config["generators"]["validation"],
             include_real=include_real,
         )
-        test_records = _select_records(
+        test_records = select_records(
             full_dataset.records,
             split_by_id,
             split="test",

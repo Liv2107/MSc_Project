@@ -1,12 +1,4 @@
-"""Write the dissertation results-analysis exports from the saved runs.
-
-Read-only with respect to run directories. Nothing here trains, infers, or edits a
-saved artefact; it reads ``outputs/`` and writes CSVs plus a drafting note into
-``outputs/report/dissertation_results/``.
-
-Usage:
-    python -m scripts.build_dissertation_results --output outputs/report/dissertation_results
-"""
+"""Write the dissertation results-analysis exports from the saved runs."""
 
 from __future__ import annotations
 
@@ -19,21 +11,12 @@ from typing import Any
 
 from src.evaluation import dissertation as D
 
-#: Status when no external run exists yet. The manifest records it explicitly so a later
-#: reader cannot mistake the plan for a result. Once an external run is present under
-#: ``outputs/`` the manifest reports ``executed`` instead and carries its numbers.
 EXTERNAL_CHALLENGE_STATUS = "proposed_not_executed"
 EXTERNAL_CHALLENGE_STATUS_EXECUTED = "executed"
 
 
 def _executed_external_challenge(output_root: Path | None) -> dict[str, Any] | None:
-    """Return the executed external challenge, or ``None`` while it has not been run.
-
-    Read-only. The internal Chapter 4 context deliberately does not discover
-    ``external_challenge`` runs, so this is the only place the two meet, and it reports
-    the external result beside the plan rather than merging it into any internal table.
-    """
-
+    """Return the executed external challenge, or ``None`` while it has not been run."""
     if output_root is None:
         return None
     runs = sorted(
@@ -105,7 +88,6 @@ def _executed_external_challenge(output_root: Path | None) -> dict[str, Any] | N
 
 def _write_csv(rows: Sequence[Mapping[str, Any]], destination: Path, name: str) -> Path:
     """Write rows to ``name``.csv, unioning keys so a sparse row cannot drop a column."""
-
     path = destination / f"{name}.csv"
     if not rows:
         path.write_text("", encoding="utf-8")
@@ -124,13 +106,7 @@ def _write_csv(rows: Sequence[Mapping[str, Any]], destination: Path, name: str) 
 
 
 def external_challenge_manifest(ctx: D.Context) -> dict[str, Any]:
-    """The compact machine-readable manifest for the proposed external challenge.
-
-    Provenance fields are ``null`` where the fact is not yet established. They are
-    present so the schema is fixed before any image exists, and absent-as-null so the
-    manifest cannot be read as claiming something that was never verified.
-    """
-
+    """The compact machine-readable manifest for the proposed external challenge."""
     provenance = ctx.output_root and D.dataset_provenance(ctx)
     executed = _executed_external_challenge(ctx.output_root)
     return {
@@ -256,7 +232,6 @@ def build(destination: Path, output_root: Path) -> list[Path]:
     written.append(_write_csv(D.experiment_inventory(ctx), destination, "experiment_inventory"))
     written.append(_write_csv(D.validation_summary(ctx), destination, "validation_summary"))
 
-    # Supporting exports the notebooks also read back.
     written.append(_write_csv(D.marginal_recovery(ctx), destination, "marginal_recovery"))
     written.append(_write_csv(D.first_budget_reaching(ctx), destination, "attainment_budgets"))
     written.append(_write_csv(D.depth_comparisons(ctx), destination, "depth_comparisons"))
@@ -267,8 +242,6 @@ def build(destination: Path, output_root: Path) -> list[Path]:
     written.append(_write_csv(D.reproduction_checks(ctx), destination, "reproduction_checks"))
     written.append(_write_csv(D.limitations(ctx), destination, "limitations"))
 
-    # Combined figures the Chapter 4 package does not provide. Generated here rather
-    # than assembled by hand so they regenerate with the data.
     from scripts import _dissertation_figures
 
     written += _dissertation_figures.build_all(ctx, destination)
@@ -292,7 +265,6 @@ def build(destination: Path, output_root: Path) -> list[Path]:
 
 def render_notes(ctx: D.Context) -> str:
     """Compose RESULTS_NOTES.md, with every number formatted from a looked-up value."""
-
     from scripts._dissertation_notes import compose
 
     return compose(ctx)

@@ -1,19 +1,5 @@
-# Limited-data recovery on Tiny GenImage for held-out vqdm.
-# 1 subset seed x 1 training seed x 4 budgets = 4 adaptation cells, plus the 0% reference
-# recomputed in-run = 5 reported points. Head-only adaptation only.
-#
-# WHY THIS EXPERIMENT. The completed vqdm leave-one-generator-out run measured a genuine
-# generalisation failure: ROC-AUC 0.9664 in-distribution against 0.6746 on held-out vqdm,
-# with recall collapsing to 0.304 at the fixed 0.5 threshold. Unlike the biggan condition
-# (ROC-AUC drop 0.009), there is something substantial to recover here, which is what
-# makes the recovery curve worth measuring.
-#
-# Every setting below is inherited unchanged from configs/tiny_recovery_biggan.yaml
-# except the held-out generator, the generator lists, and the starting checkpoint. The
-# budgets, subset seed, training seed, validation fraction, epoch budget, learning rate,
-# and freeze policy are deliberately identical, so the two recovery curves are comparable
-# and any difference between them is attributable to the generator rather than to the
-# adaptation procedure.
+# Head-only recovery for held-out vqdm, with four adaptation budgets.
+# Set starting_checkpoint to the matching unseen run before running.
 
 base_config: tiny_genimage_base.yaml
 

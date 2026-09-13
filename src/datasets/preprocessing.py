@@ -1,30 +1,4 @@
-"""Deterministic re-encoding cache that removes format and spatial shortcuts.
-
-An audit of Tiny GenImage found two shortcuts that let a detector separate the classes
-without looking at generative artefacts at all. Every ``ai`` image is PNG and every
-``nature`` image is JPEG, so compression artefacts appear in exactly one class and file
-format alone is a perfect classifier. Fakes are also square and generator-specific
-(BigGAN 128, VQDM/ADM/GLIDE 256, SDv1.5/Wukong 512, Midjourney 1024) while reals are
-variable and roughly 500x375, so raw dimensions identify both the class and, among
-fakes, the generator.
-
-This module writes a preprocessed cache in which every image, real and fake, has been
-decoded to RGB, resized under one policy, and re-encoded with identical JPEG settings.
-Training and evaluation read the cache, so neither shortcut survives into the input.
-
-It does not remove all native-resolution effects: an image generated at 128x128 and
-upscaled still carries different high-frequency content from one generated at 1024x1024
-and downscaled, and a single JPEG pass leaves different residue on an already-JPEG real
-than on a never-compressed PNG fake. Those are genuine properties of the source data,
-and the dissertation must say so rather than claim they have been neutralised.
-
-Original dataset files are never modified; the cache is written elsewhere. The process
-is deterministic (resampling filter, resize policy, JPEG quality, subsampling, and
-metadata stripping are pinned, and no random state is used), auditable (a JSON sidecar
-records the policy, the library versions that did the encoding, and per-image source and
-output digests), and resumable (an image whose cached output already matches the
-recorded digest is skipped).
-"""
+"""Deterministic re-encoding cache that removes format and spatial shortcuts."""
 
 from __future__ import annotations
 
@@ -42,11 +16,9 @@ from PIL import Image, ImageOps
 
 CACHE_SCHEMA_VERSION = 1
 
-# Pinned so the cache is reproducible. Changing any of these changes the data and must
-# be treated as a new dataset version, not an in-place edit.
 DEFAULT_TARGET_SIZE = 256
 DEFAULT_JPEG_QUALITY = 95
-JPEG_SUBSAMPLING = 0  # 4:4:4, i.e. no chroma subsampling, applied to both classes.
+JPEG_SUBSAMPLING = 0
 RESAMPLE_FILTER = Image.Resampling.BICUBIC
 RESAMPLE_FILTER_NAME = "BICUBIC"
 
@@ -54,7 +26,6 @@ RESAMPLE_FILTER_NAME = "BICUBIC"
 @dataclass(frozen=True, slots=True)
 class PreprocessingPolicy:
     """The complete, pinned description of how cached images were produced."""
-
     target_size: int = DEFAULT_TARGET_SIZE
     jpeg_quality: int = DEFAULT_JPEG_QUALITY
     resize_policy: str = "shortest_side_then_center_crop"
@@ -75,7 +46,6 @@ class PreprocessingPolicy:
 
     def identity(self) -> str:
         """Stable digest of the policy, used to detect a stale cache."""
-
         payload = json.dumps(asdict(self), sort_keys=True).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()[:16]
 
@@ -106,14 +76,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def preprocess_image(image: Image.Image, policy: PreprocessingPolicy) -> Image.Image:
-    """Apply the deterministic spatial policy and return an RGB image.
-
-    Shortest side is scaled to ``target_size`` and the centre ``target_size`` square is
-    taken. This preserves aspect ratio for the variable-shape real images instead of
-    distorting them, while giving every image -- real or fake, upscaled or downscaled --
-    exactly the same output dimensions.
-    """
-
+    """Apply the deterministic spatial policy and return an RGB image."""
     converted = ImageOps.exif_transpose(image).convert("RGB")
     width, height = converted.size
     if width <= 0 or height <= 0:
@@ -140,13 +103,9 @@ def write_preprocessed_image(
     source: Path, destination: Path, policy: PreprocessingPolicy
 ) -> None:
     """Re-encode one image into the cache atomically, stripping metadata."""
-
     destination.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(source) as image:
         processed = preprocess_image(image, policy)
-    # A fresh image object carries no EXIF/ICC from the source, so encoder-visible
-    # metadata cannot leak class information either. Rebuilding from raw bytes copies the
-    # pixels and nothing else.
     clean = Image.frombytes("RGB", processed.size, processed.tobytes())
     handle, temporary_name = tempfile.mkstemp(dir=destination.parent, suffix=".tmp")
     os.close(handle)
@@ -182,13 +141,7 @@ def build_preprocessed_cache(
     policy: PreprocessingPolicy,
     progress_every: int = 2000,
 ) -> CacheResult:
-    """Materialise the cache for every manifest row and write an audit index.
-
-    Returns counts of newly written and skipped-because-current images. Rewrites are
-    skipped only when the recorded source digest, policy identity, and output digest all
-    still match, so a changed source or policy always forces regeneration.
-    """
-
+    """Materialise the cache for every manifest row and write an audit index."""
     data_root = data_root.resolve()
     cache_root = cache_root.resolve()
     try:
@@ -213,8 +166,6 @@ def build_preprocessed_cache(
         source = (data_root / str(row["image_path"])).resolve()
         if not source.is_file():
             raise FileNotFoundError(f"manifest image is missing: {source}")
-        # Cache layout mirrors the manifest's relative path, with a .jpg suffix, so the
-        # provenance of every cached file stays readable.
         relative = Path(str(row["image_path"])).with_suffix(".jpg")
         destination = cache_root / relative
         source_digest = _sha256_file(source)
@@ -267,12 +218,7 @@ def rewrite_manifest_to_cache(
     data_root: Path,
     dataset_source_suffix: str = "+preprocessed",
 ) -> list[dict[str, Any]]:
-    """Return manifest rows pointing at cached files, with provenance preserved.
-
-    ``image_path`` is repointed at the cache while ``original_image_path`` keeps the
-    source location, so a cached run can always be traced back to raw data.
-    """
-
+    """Return manifest rows pointing at cached files, with provenance preserved."""
     cache_root = cache_root.resolve()
     data_root = data_root.resolve()
     rewritten: list[dict[str, Any]] = []

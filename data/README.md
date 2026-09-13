@@ -1,24 +1,14 @@
-# Data directory
+# Data
 
-## Purpose
+Keep downloaded images in `raw/`, manifests and saved split assignments in
+`manifests/`, and derived image caches in `processed/`. These local files are
+excluded from version control.
 
-Store local manifests and images here while keeping them outside version control. The source code must not assume a particular vendor's folder layout; convert source metadata into the common manifest described in the root README.
+See [GENIMAGE.md](GENIMAGE.md) for the source layout and acquisition details,
+and the root README for Tiny GenImage import commands. For other datasets,
+start with [manifest_template.csv](manifest_template.csv).
 
-## Suggested eventual layout
-
-```text
-data/
-├── raw/              # Immutable downloaded or collected files
-├── manifests/        # Versioned CSV/Parquet metadata and saved split assignments
-└── processed/        # Derived files only when preprocessing cannot be done on load
-```
-
-Document licences, checksums, acquisition dates, and any excluded/corrupt records. Never modify raw data in place, and never use the unseen-generator test partition to make cleaning decisions that depend on labels or model behaviour.
-
-## Implementation checklist
-
-- [x] Document the selected GenImage licence and allowed uses in `GENIMAGE.md`.
-- [x] Define the canonical manifest columns and label convention.
-- [x] Require provenance and group identifiers.
-- [x] Validate file paths, exact duplicates, and corrupt images.
-- [x] Save deterministic split assignments with an audit summary and manifest hash.
+Record licences, acquisition dates, checksums and exclusions. Keep raw images
+unchanged. The importer validates files, deduplicates repeated real images and
+writes a split audit. Source groups prevent related records crossing partitions;
+missing prompt or original-image provenance remains a limitation.

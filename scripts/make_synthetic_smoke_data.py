@@ -1,24 +1,4 @@
-"""Generate SYNTHETIC images in the GenImage folder layout for pipeline smoke tests.
-
-WARNING
--------
-This script does not download, sample, or approximate GenImage. It writes small
-procedurally generated images into the *official GenImage directory layout* so the
-end-to-end pipeline (import -> manifest -> group-safe splits -> CLIP detector ->
-training -> checkpoint selection -> untouched test evaluation -> metrics) can be
-executed and verified without the real 1M-image release.
-
-Numbers produced from this data are PIPELINE EVIDENCE ONLY. They are not research
-results and must never appear in the dissertation as detector performance. The
-generated tree is written under a ``genimage_synthetic`` root and every config that
-consumes it is named ``configs/smoke_synthetic_*.yaml``, precisely so synthetic runs
-stay distinguishable from real ones.
-
-The "real" class is low-frequency (smooth gradients plus mild noise). Each "fake"
-generator adds its own synthesis artefact, so the task is learnable and the held-out
-generator's artefact is genuinely unseen. See ``GENERATOR_FOLDERS`` for why the
-held-out generator's artefact differs in kind rather than only in frequency.
-"""
+"""Generate SYNTHETIC images in the GenImage folder layout for pipeline smoke tests."""
 
 from __future__ import annotations
 
@@ -31,14 +11,6 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-# Folder names must match the official release so scripts/import_genimage.py maps them.
-#
-# The three training generators share an artefact FAMILY (an axis-aligned periodic
-# grid) and differ only in frequency and phase. BigGAN's artefact is a different kind
-# of structure entirely -- a low-amplitude radial ripple -- so a detector that latches
-# onto "grid at these frequencies" does not transfer to it for free. That is what makes
-# the fixture produce a non-trivial generalisation gap and therefore a recovery curve
-# with something to recover, which is the behaviour the protocols need to exercise.
 GENERATOR_FOLDERS: dict[str, dict[str, Any]] = {
     "Midjourney": {"kind": "grid", "frequency": 6.0, "phase": 0.0, "amplitude": 0.16},
     "Stable Diffusion V1.4": {"kind": "grid", "frequency": 9.0, "phase": 0.7, "amplitude": 0.15},
@@ -47,8 +19,6 @@ GENERATOR_FOLDERS: dict[str, dict[str, Any]] = {
 }
 
 
-# Fixed per-split offsets. Python's hash() on strings is salted per process, so using it
-# here would make the "deterministic" fixture differ between runs.
 SPLIT_OFFSETS = {"train": 1, "val": 2}
 
 
@@ -117,9 +87,6 @@ def build_synthetic_tree(
             )
         shutil.rmtree(root)
 
-    # Real images are generated once and byte-identical across every generator folder.
-    # This mirrors GenImage, where the same ImageNet 'nature' files repeat per subset,
-    # and exercises the importer's content-verified deduplication path.
     shared_real = root / "_shared_nature"
     real_counts = {"train": train_real, "val": val_real}
     for official_split, count in real_counts.items():

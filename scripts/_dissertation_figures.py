@@ -1,22 +1,4 @@
-"""The combined figures the dissertation needs that the Chapter 4 package does not have.
-
-Two figures only, both of which replace an act of visual arithmetic the reader would
-otherwise have to perform across two separate plots:
-
-``fig13_depth_vs_budget_tradeoff_<generator>``
-    Puts adaptation depth and labelled budget on the same axes, with the two conditions
-    the trade-off argument rests on annotated in place. Reading this off ``fig02``
-    (budget, head-only) beside ``fig03`` (depth grid) requires the reader to hold a
-    number in their head and compare it across two coordinate systems.
-
-``fig14_confusion_panel``
-    One panel of the five confusion matrices worth showing, on a shared colour scale so
-    the counts are comparable. Five separate figures are not comparable by eye and cost
-    five figure slots.
-
-Both are generated from the saved cell metrics. Neither loads a model or a prediction
-file it does not need.
-"""
+"""The combined figures the dissertation needs that the Chapter 4 package does not have."""
 
 from __future__ import annotations
 
@@ -31,7 +13,6 @@ from matplotlib.figure import Figure  # noqa: E402
 
 from src.evaluation import dissertation as D  # noqa: E402
 
-#: One colour per depth, kept identical across both new figures and readable in greyscale.
 DEPTH_STYLE: dict[str, dict[str, Any]] = {
     "head_only": {"colour": "#4C72B0", "marker": "o", "label": "head only (769 params)"},
     "last_block": {"colour": "#DD8452", "marker": "s", "label": "last block (7.09M params)"},
@@ -53,7 +34,6 @@ def depth_vs_budget_tradeoff(
     ctx: D.Context, generator: str, destination: Path, *, metric: str = "roc_auc"
 ) -> list[Path]:
     """Depth curves over budget, with the cheap-deep against dear-shallow pair annotated."""
-
     rows = [
         r
         for r in D.depth_table(ctx)
@@ -108,10 +88,6 @@ def depth_vs_budget_tradeoff(
         None,
     )
     if cheap_deep and dear_shallow:
-        # Label positions are given in data coordinates and aimed at the two regions the
-        # curves leave empty: above the rising full curve on the left, and below the
-        # head-only curve on the right. Offset-point placement put both boxes in the
-        # same crowded band around y=0.94, where they overlapped each other.
         span = max(r[metric] for r in rows) - min(
             [zero[metric]] if zero and zero[metric] is not None else [] + [r[metric] for r in rows]
         )
@@ -172,7 +148,6 @@ def depth_vs_budget_tradeoff(
 
 def confusion_panel(ctx: D.Context, destination: Path) -> list[Path]:
     """The five selected confusion matrices in one panel on a shared scale."""
-
     selected = [row for row in D.confusion_selection(ctx) if row.get("available")]
     if not selected:
         return []

@@ -36,9 +36,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-# Protocols that train one long model and can therefore continue from a saved epoch.
-# fine_tuning and ablation are grids of many short fits, where an interruption is
-# resumed by re-running the grid rather than by continuing one model.
 RESUMABLE_EXPERIMENTS = ("baseline", "unseen_generator")
 
 

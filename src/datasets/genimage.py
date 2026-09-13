@@ -19,10 +19,6 @@ from .splitting import SplitAssignment, SplitFractions, create_grouped_splits
 
 DATASET_SOURCE = "genimage_arxiv_2306.08571"
 
-# Tiny GenImage (Kaggle: yangsangtai/tiny-genimage) is a REDUCED DERIVATIVE of GenImage.
-# It ships seven generator folders under their official archive names and EXCLUDES
-# Stable Diffusion v1.4 entirely. Results from it are not full-benchmark GenImage
-# results; ``TINY_GENIMAGE_DATASET_SOURCE`` records that distinction in the manifest.
 TINY_GENIMAGE_DATASET_SOURCE = "tiny_genimage_kaggle_yangsangtai_v1_subset_of_2306.08571"
 TINY_GENIMAGE_GENERATORS = (
     "biggan",
@@ -35,7 +31,6 @@ TINY_GENIMAGE_GENERATORS = (
 )
 
 GENERATOR_ALIASES = {
-    # Display names used by the full official release.
     "midjourney": "midjourney",
     "vqdm": "vqdm",
     "wukong": "wukong",
@@ -44,10 +39,6 @@ GENERATOR_ALIASES = {
     "glide": "glide",
     "biggan": "biggan",
     "adm": "adm",
-    # Official archive directory names, as shipped by Tiny GenImage. The date stamps are
-    # part of the upstream archive names and carry no experimental meaning. ``sdv5`` is
-    # mapped explicitly to stable_diffusion_v1_5; there is no sdv4 folder in this subset
-    # and none is substituted.
     "imagenet_ai_0419_biggan": "biggan",
     "imagenet_ai_0419_vqdm": "vqdm",
     "imagenet_ai_0424_sdv5": "stable_diffusion_v1_5",
@@ -152,21 +143,7 @@ def build_genimage_import(
     max_per_generator_split_class: int | None = None,
     dataset_source: str = DATASET_SOURCE,
 ) -> GenImageImportResult:
-    """Index GenImage and create train/validation/test assignments.
-
-    Official ``train`` remains training data. Official ``val`` is divided into
-    model-selection validation and untouched test data. Repeated nature images across
-    generator folders are retained exactly once, deduplicated by file CONTENT so that
-    the same photograph shipped under different filenames is not counted twice.
-    Deduplication happens before splitting, so a repeated photograph can never be
-    assigned to two partitions.
-    """
-
-    # Normalise WITHOUT following symlinks. Large read-only datasets are commonly
-    # symlinked into data/raw/ from a cache directory (kagglehub, a scratch volume);
-    # resolving would point outside data_root and make every manifest path absolute and
-    # machine-specific. Normalising lexically keeps manifest paths relative to data_root,
-    # which is the portability property this check exists to protect.
+    """Index GenImage and create train/validation/test assignments."""
     root = Path(os.path.normpath(Path.cwd() / genimage_root))
     data_root = Path(os.path.normpath(Path.cwd() / data_root))
     if not root.is_dir():
@@ -197,14 +174,6 @@ def build_genimage_import(
         raise FileNotFoundError(f"requested GenImage folders are missing: {', '.join(missing)}")
 
     indexed: list[_IndexedImage] = []
-    # Authentic images are keyed by CONTENT, not by filename. GenImage repeats the same
-    # ImageNet photographs across generator subsets, and Tiny GenImage additionally ships
-    # some of them under DIFFERENT filenames in different generator folders. Keying on the
-    # logical path therefore missed real duplicates, which then surfaced much later as a
-    # hard failure in the manifest audit. Content keying subsumes the path-based rule
-    # (identical path plus identical bytes gives the same digest) and removes each
-    # photograph exactly once. Two files sharing a name but differing in content are now
-    # simply two distinct photographs, which is the correct reading.
     real_by_content: dict[str, _IndexedImage] = {}
     duplicate_real_files = 0
     cross_official_split_duplicates: list[str] = []
@@ -219,10 +188,6 @@ def build_genimage_import(
                         digest = _content_sha256(path)
                         existing = real_by_content.get(digest)
                         if existing is not None:
-                            # Deduplicating happens BEFORE splitting, so a repeated photo
-                            # can never land in two partitions. A repeat spanning the
-                            # official train/val boundary is still recorded, because it
-                            # means the upstream release itself overlaps its own splits.
                             if existing.official_split != official_split:
                                 cross_official_split_duplicates.append(
                                     f"{existing.path.name}({existing.official_split})"
@@ -359,7 +324,6 @@ def write_genimage_import(
     result: GenImageImportResult, *, manifest_path: Path, split_path: Path
 ) -> None:
     """Atomically write the GenImage manifest, assignments, and audit sidecar."""
-
     if not result.rows or not result.assignments:
         raise ValueError("cannot write an empty GenImage import")
     for destination in (manifest_path, split_path, manifest_path.with_suffix(".audit.json")):

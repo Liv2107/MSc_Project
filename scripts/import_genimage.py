@@ -1,14 +1,4 @@
-"""Create this project's manifest and splits from an extracted GenImage release.
-
-Supports both the full official release and the reduced Tiny GenImage subset
-(``--tiny-genimage``), which ships seven generator folders under their official archive
-names and excludes Stable Diffusion v1.4.
-
-With ``--preprocess`` the importer also materialises a deterministic re-encoded cache
-(see ``src/datasets/preprocessing.py``) and points the manifest at it. That is required
-for the primary experiment on Tiny GenImage, where container format and native
-resolution would otherwise separate the classes without any generative evidence.
-"""
+"""Create this project's manifest and splits from an extracted GenImage release."""
 
 from __future__ import annotations
 

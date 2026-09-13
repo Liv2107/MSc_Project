@@ -1,17 +1,4 @@
-"""Build the five-figure supervisor meeting pack from completed experiments.
-
-Five figures, in the order the scientific argument runs, plus one headline table and a
-``MEETING_README.md`` giving a sentence to say, what each figure demonstrates, and its
-caveat.
-
-Like every other reader in this repository it is strictly non-fabricating. An arm that
-has not been run is drawn as **PENDING** and named in the README; it is never
-interpolated, never estimated, and never quietly dropped so the figure looks complete.
-
-Usage
------
-    python -m scripts.build_meeting_pack --output outputs/report/chapter4
-"""
+"""Build the five-figure supervisor meeting pack from completed experiments."""
 
 from __future__ import annotations
 
@@ -61,7 +48,6 @@ def _unseen_by_generator_and_head(
     records: Sequence[Any],
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """Index completed leave-one-out runs by (held-out generator, head type)."""
-
     indexed: dict[tuple[str, str], dict[str, Any]] = {}
     for record in records:
         if record.experiment_type != "unseen_generator":
@@ -90,7 +76,6 @@ def build(destination: Path, output_root: Path) -> list[Slide]:
     slides: list[Slide] = []
     destination.mkdir(parents=True, exist_ok=True)
 
-    # ---------------------------------------------------------- FIGURE 1
     degradation = [
         row for row in degradation_rows(consolidated) if row["operating_point"] == "default"
     ]
@@ -128,7 +113,6 @@ def build(destination: Path, output_root: Path) -> list[Slide]:
             )
         )
 
-    # ---------------------------------------------------------- FIGURE 2
     development_rows: list[dict[str, Any]] = []
     pending_arms: list[str] = []
     for head in ("linear", "cosine"):
@@ -158,15 +142,11 @@ def build(destination: Path, output_root: Path) -> list[Slide]:
                 "withstand the shift better?"
             ),
         )
-        # With a single arm present the shared plotting helper collapses the tick label to
-        # the bare metric name, which loses the very thing this figure compares.
         axes.set_xticks(
             axes.get_xticks(),
             labels=[f"ROC-AUC\n({row['held_out_generator']})" for row in development_rows],
         )
         if pending_arms:
-            # Never invent the missing arm. The note goes BELOW the axes so it cannot be
-            # mistaken for a plotted value.
             axes.text(
                 0.5,
                 -0.30,
@@ -195,7 +175,6 @@ def build(destination: Path, output_root: Path) -> list[Slide]:
             )
         )
 
-    # ---------------------------------------------------------- FIGURE 3
     recovery_rows = [
         row
         for row in consolidated
@@ -242,7 +221,6 @@ def build(destination: Path, output_root: Path) -> list[Slide]:
             )
         )
 
-    # ---------------------------------------------------------- FIGURE 4
     ablation_rows = [
         row
         for row in consolidated
@@ -285,7 +263,6 @@ def build(destination: Path, output_root: Path) -> list[Slide]:
             )
         )
 
-    # ---------------------------------------------------------- FIGURE 5
     stages = _roadmap_stages(unseen, bool(recovery_rows), bool(ablation_rows))
     figure, _ = plot_experiment_roadmap(
         stages, title="Experimental logic: each stage exists because of the previous result"
@@ -370,7 +347,6 @@ def _write_headline_table(
     destination: Path,
 ) -> None:
     """One compact table of every completed headline result."""
-
     rows: list[list[Any]] = []
     for (generator, head), entry in sorted(unseen.items()):
         pair = _degradation_pair(entry)
@@ -442,7 +418,7 @@ def write_readme(slides: Sequence[Slide], destination: Path, output_root: Path) 
     usable = reportable_runs(records)
     unseen = _unseen_by_generator_and_head(usable)
     pending = [
-        f"`{name}` — not yet run"
+        f"`{name}`: not yet run"
         for name, present in (
             (
                 f"tiny_unseen_{DEVELOPMENT_GENERATOR}_cosine",
@@ -490,7 +466,7 @@ def write_readme(slides: Sequence[Slide], destination: Path, output_root: Path) 
     for record in usable:
         head = "cosine" if record.experiment_name.endswith("_cosine") else "linear"
         lines.append(
-            f"- `{record.experiment_name}` ({record.experiment_type}, {head} head) — "
+            f"- `{record.experiment_name}` ({record.experiment_type}, {head} head): "
             f"`{record.run_id}`"
         )
     lines += ["", "## Pending experiments", ""]
