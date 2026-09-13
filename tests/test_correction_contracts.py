@@ -1,9 +1,4 @@
-"""Contracts for the methodological corrections.
-
-Covers: Tiny GenImage aliases and provenance, deterministic re-encoding that removes the
-format shortcut, spatial normalisation, balanced final test sets, threshold provenance,
-and the non-cumulative-weights guarantee for adaptation budgets.
-"""
+"""Contracts for the methodological corrections."""
 
 from __future__ import annotations
 
@@ -45,9 +40,6 @@ TINY_ARCHIVE_FOLDERS = {
 }
 
 
-# ------------------------------------------------------------------ 1. aliases
-
-
 @pytest.mark.parametrize(("folder", "expected"), sorted(TINY_ARCHIVE_FOLDERS.items()))
 def test_tiny_genimage_archive_folders_map_to_canonical_names(folder: str, expected: str) -> None:
     assert _canonical_generator(folder) == expected
@@ -60,7 +52,6 @@ def test_sdv5_archive_folder_maps_explicitly_to_stable_diffusion_v1_5() -> None:
 def test_tiny_genimage_does_not_provide_or_substitute_stable_diffusion_v1_4() -> None:
     assert "stable_diffusion_v1_4" not in TINY_GENIMAGE_GENERATORS
     assert set(TINY_GENIMAGE_GENERATORS) == set(TINY_ARCHIVE_FOLDERS.values())
-    # No archive folder may resolve to v1.4, which would silently substitute a generator.
     assert all(
         _canonical_generator(folder) != "stable_diffusion_v1_4" for folder in TINY_ARCHIVE_FOLDERS
     )
@@ -69,9 +60,6 @@ def test_tiny_genimage_does_not_provide_or_substitute_stable_diffusion_v1_4() ->
 def test_unknown_generator_folders_are_still_rejected() -> None:
     with pytest.raises(ValueError, match="unknown GenImage generator"):
         _canonical_generator("imagenet_ai_9999_notreal")
-
-
-# ------------------------------------------------- 2 & 3. preprocessing cache
 
 
 def _write_source(path: Path, size: tuple[int, int], fmt: str, colour: int) -> None:
@@ -118,7 +106,6 @@ def test_policy_rejects_invalid_settings() -> None:
 
 def _tiny_manifest(root: Path) -> list[dict[str, Any]]:
     """Two PNG fakes and two JPEG reals, mirroring the Tiny GenImage shortcut."""
-
     rows: list[dict[str, Any]] = []
     spec = [
         ("f0", "raw/g/train/ai/f0.png", 1, "biggan", (128, 128), "PNG"),
@@ -161,10 +148,8 @@ def test_cache_removes_the_format_shortcut_and_normalises_size(tmp_path: Path) -
         with Image.open(path) as image:
             formats.add(image.format)
             sizes.add(image.size)
-    # Format is now constant across BOTH classes, so it cannot predict the label.
     assert formats == {"JPEG"}
     assert sizes == {(256, 256)}
-    # Original files are untouched.
     assert (tmp_path / rows[0]["image_path"]).suffix == ".png"
     with Image.open(tmp_path / rows[0]["image_path"]) as original:
         assert original.format == "PNG"
@@ -230,9 +215,6 @@ def test_cache_must_live_beneath_data_root(tmp_path: Path) -> None:
         )
 
 
-# ------------------------------------------------------ 4. balanced test sets
-
-
 def _record(sample_id: str, label: int, generator: str) -> DatasetRecord:
     return DatasetRecord(sample_id, Path(f"/d/{sample_id}.jpg"), label, generator, sample_id, "t")
 
@@ -256,9 +238,7 @@ def test_final_test_set_is_balanced_fifty_fifty() -> None:
     assert metadata["real_count"] == 250
     assert metadata["positive_prevalence"] == pytest.approx(0.5)
     assert sum(1 for r in selected if r.label == 1) == sum(1 for r in selected if r.label == 0)
-    # Every held-out fake is included, none dropped.
     assert sum(1 for r in selected if r.generator == "biggan") == 250
-    # No other generator's fakes leak into the held-out test set.
     assert {r.generator for r in selected} == {"biggan", "real"}
 
 
@@ -271,7 +251,6 @@ def test_real_half_is_deterministic_and_identical_across_held_out_generators() -
     other, meta_other = build_balanced_final_test(records, splits, unseen_generator="glide")
     reals_first = {r.sample_id for r in first if r.label == 0}
     reals_other = {r.sample_id for r in other if r.label == 0}
-    # Same fixed real pool for every held-out generator, so results stay comparable.
     assert meta_first["real_pool_sha256"] != "" and meta_first["real_pool_sha256"] is not None
     assert reals_first == reals_other or len(reals_other) != len(reals_first)
 
@@ -284,7 +263,6 @@ def test_in_distribution_test_is_balanced_to_the_same_prevalence() -> None:
     )
     assert in_meta["positive_prevalence"] == pytest.approx(unseen_meta["positive_prevalence"])
     assert len(in_dist) == len(unseen)
-    # The held-out generator must not appear in the in-distribution comparison set.
     assert "biggan" not in {r.generator for r in in_dist}
 
 
@@ -302,24 +280,13 @@ def test_balanced_test_refuses_a_missing_generator() -> None:
 
 def test_real_pool_seed_is_fixed_and_not_the_run_seed() -> None:
     """Documents intent: the real pool must not move when reproducibility.seed changes."""
-
     assert REAL_TEST_POOL_SEED == 20260808
-
-
-# ---------------------------------------- 6. adaptation cells are not cumulative
 
 
 def test_every_adaptation_cell_reloads_the_original_starting_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Prove 10% does not start from the trained 5% model, and so on.
-
-    The real cell runner is driven with the heavy pieces stubbed out, recording which
-    checkpoint each cell loads its initial weights from and whether the model object was
-    freshly constructed. Cumulative weights would show up as a cell loading a path other
-    than the single starting checkpoint, or reusing a previous model instance.
-    """
-
+    """Prove 10% does not start from the trained 5% model, and so on."""
     from src.experiments import fine_tuning as ft
 
     starting = tmp_path / "baseline" / "best_checkpoint.pt"
@@ -405,7 +372,6 @@ def test_every_adaptation_cell_reloads_the_original_starting_checkpoint(
     monkeypatch.setattr(ft, "seed_everything", lambda seed, deterministic: None)
     monkeypatch.setattr(ft, "assert_pools_group_disjoint", lambda a, b: None)
 
-    # Minimal pools spanning both classes.
     pool_records = [_record(f"a-{i}", i % 2, "biggan" if i % 2 else "real") for i in range(8)]
     pools = ft.AdaptationPools(
         train_groups={}, validation_groups={},
@@ -444,16 +410,13 @@ def test_every_adaptation_cell_reloads_the_original_starting_checkpoint(
         )
         loads.append((f"p{int(fraction * 100):02d}", str(cell.record["starting_checkpoint"])))
 
-    # Every budget declares the same, original starting checkpoint.
     assert {path for _, path in loads} == {str(starting)}
-    # A distinct model object was constructed per cell: no weights carried over.
     assert len(constructed) == len(fractions)
     assert len(set(constructed)) == len(fractions)
 
 
 def test_cell_records_both_thresholds_with_provenance() -> None:
     """The reporting spec requires the value AND how it was obtained, for both points."""
-
     assert "adaptation_validation" in ft_provenance()
     assert "seen_generator_validation" in THRESHOLD_PROVENANCE_SEEN_VALIDATION
 
@@ -466,7 +429,6 @@ def ft_provenance() -> str:
 
 def test_manifest_digest_helper_is_stable() -> None:
     """Guards the sample-ID digest used to prove test-set identity across budgets."""
-
     ids = ["b", "a", "c"]
     first = hashlib.sha256("|".join(sorted(ids)).encode("utf-8")).hexdigest()
     second = hashlib.sha256("|".join(sorted(reversed(ids))).encode("utf-8")).hexdigest()

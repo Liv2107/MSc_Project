@@ -1,16 +1,4 @@
-# ============================================================================
-# PIPELINE SMOKE TEST -- NOT A RESEARCH CONFIGURATION
-# ============================================================================
-# Runs the full baseline chain against the SYNTHETIC GenImage-layout fixture
-# produced by scripts/make_synthetic_smoke_data.py. Its purpose is to prove that
-# import -> manifest -> group-safe splits -> CLIP detector -> training ->
-# checkpoint selection -> untouched test evaluation -> metrics actually executes.
-#
-# Metrics from this config describe procedurally generated images. They are NOT
-# detector performance and must never be reported in the dissertation.
-#
-# Real runs use configs/genimage_baseline.yaml against the official release.
-# ============================================================================
+# Synthetic pipeline check. Do not report these metrics as research results.
 
 base_config: base.yaml
 

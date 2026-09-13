@@ -1,14 +1,10 @@
-# Checkpoints directory
+# Checkpoints
 
-## Purpose
+Local model weights are excluded from version control. Baseline and
+unseen-generator runs save checkpoints in `outputs/<run_id>/`, alongside the
+resolved config, model identity and checkpoint digests.
 
-Store local model states during development. A checkpoint is scientifically useful only when paired with model identity, freeze policy, optimiser/scheduler state, epoch, validation criterion, random seed, and resolved configuration.
-
-Do not commit large weight files. Final experiments should record a checksum or artefact-store identifier so a reported model can be recovered unambiguously.
-
-## Implementation checklist
-
-- [ ] Define the checkpoint dictionary schema.
-- [ ] Save and restore all state required for a faithful resume.
-- [ ] Verify a save/load prediction round trip.
-- [ ] Record checksums for dissertation checkpoints.
+`best_checkpoint.pt` is selected on validation. Interrupted runs can resume from
+`last_checkpoint.pt` and `training_state.json`; see the root README. Recovery
+and ablation runs retain cell checkpoint digests and predictions, but remove
+cell weights after evaluation.

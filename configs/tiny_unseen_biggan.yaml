@@ -1,9 +1,5 @@
-# Leave-one-generator-out on Tiny GenImage, holding out biggan.
-# Produces the 0%-adaptation reference for the biggan recovery curve.
-#
-# The final test set is built balanced 50/50 (all biggan test fakes plus an equal number
-# of reals from a FIXED real pool shared across held-out generators), so precision, F1,
-# and PR-AUC are comparable between generators and against the in-distribution set.
+# Hold out biggan from training and model selection.
+# The balanced test set uses the fixed real-image pool shared across generators.
 
 base_config: tiny_genimage_base.yaml
 

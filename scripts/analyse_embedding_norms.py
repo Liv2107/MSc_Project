@@ -1,36 +1,4 @@
-"""Test the PREMISE of the cosine head, independently of any training outcome.
-
-The cosine head exists because of a specific mechanistic claim:
-
-    CLIP's pooled embedding has a magnitude as well as a direction. An unnormalised
-    linear head can use that magnitude. If magnitude varies systematically BETWEEN
-    GENERATORS, then a detector trained on six generators can fit a decision boundary
-    that partly depends on a quantity which does not transfer to a seventh.
-
-That claim is measurable without training anything, and it should be measured, because
-it is what distinguishes a designed modification from a guess. This script encodes a
-sample of images with the **frozen, pretrained** CLIP backbone -- no classifier, no
-fitting, no labels used -- and reports the distribution of embedding L2 norms per
-generator.
-
-Interpretation
---------------
-* If the held-out generator's norms sit clearly apart from the training generators',
-  the premise holds and the cosine head is addressing a real property of the features.
-* If every generator's norms overlap, the premise is weak, and any improvement the
-  cosine head shows would need a different explanation. That is a useful negative result
-  and must be reported as one rather than quietly dropped.
-
-Sampling policy
----------------
-Images are drawn ONLY from the ``train`` split. The final unseen test partitions are
-never opened by this script, so a descriptive diagnostic cannot contaminate any reported
-result. Sampling is seeded and the selected sample IDs are saved.
-
-Usage
------
-    python -m scripts.analyse_embedding_norms --per-generator 100
-"""
+"""Test the PREMISE of the cosine head, independently of any training outcome."""
 
 from __future__ import annotations
 
@@ -74,7 +42,6 @@ def analyse(
         for item in load_split_assignments(Path(config["data"]["split_path"]))
     }
 
-    # Train split only: the final unseen test partitions stay untouched.
     by_generator: dict[str, list[Any]] = {}
     for record in dataset.records:
         if split_by_id.get(record.sample_id) != "train":

@@ -196,9 +196,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
             "record_training_time",
         },
         "mode_overrides": {"head_only", "last_block", "full"},
-        # Evaluation-only protocol: a frozen detector scored once on an external set
-        # built outside this benchmark. It has no training or selection keys because
-        # nothing may be fitted, selected, or thresholded on external data.
         "external_challenge": {
             "challenge_id",
             "manifest_path",
@@ -249,8 +246,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
     dropout = model.get("classifier_dropout")
     if not isinstance(dropout, (int, float)) or not 0 <= dropout < 1:
         errors.append("model.classifier_dropout must be in [0, 1)")
-    # Absent means the original linear head, so every pre-existing config keeps its
-    # exact behaviour without being edited.
     if model.get("head_type", "linear") not in {"linear", "cosine"}:
         errors.append("model.head_type must be linear or cosine")
     if training.get("optimizer") not in {"adamw", "sgd"}:

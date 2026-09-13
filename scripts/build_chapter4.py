@@ -1,27 +1,4 @@
-"""Assemble the Chapter 4 results package from completed real experiments.
-
-This is a thin assembly layer. Discovery, filtering, and the recovery/degradation
-arithmetic come from :mod:`src.evaluation.aggregation`; metric computation comes from
-:mod:`src.evaluation.metrics`; every figure comes from :mod:`src.evaluation.plots`.
-Nothing is computed here that is not either copied from a saved metrics file or derived
-from saved per-sample scores using the same functions the experiment runners used.
-
-What it refuses to do
----------------------
-* It never reads a synthetic ``SMOKE_`` run, a failed run, or an interrupted run; the
-  package is built from ``reportable_runs`` only.
-* It never interpolates a missing budget, depth, or generator. A condition that was not
-  run is absent from the figures and named in the manifest.
-* It never plots F1 values measured at different thresholds on one axis without saying
-  which threshold each came from; the operating point is in every axis label or column
-  header.
-* It never draws an error bar. With one subset seed and one training seed the spread
-  across repeats is unmeasured, and a zero-width band would claim otherwise.
-
-Usage
------
-    python -m scripts.build_chapter4 --output outputs/report/chapter4
-"""
+"""Assemble the Chapter 4 results package from completed real experiments."""
 
 from __future__ import annotations
 
@@ -52,18 +29,15 @@ from src.evaluation.plots import (
     plot_validation_trajectories,
 )
 
-#: Publication raster resolution. Vector PDF is written alongside every PNG.
 FIGURE_DPI = 300
 
 MODE_ORDER = ("head_only", "last_block", "full")
-#: The budget at which the depths differ most, so the mechanism figures use it.
 MECHANISM_BUDGET = 0.05
 
 
 @dataclass
 class Artefact:
     """One generated file plus the provenance a reader needs to audit it."""
-
     filename: str
     kind: str
     subsection: str
@@ -137,13 +111,7 @@ def _read_history(path: Path) -> list[dict[str, Any]]:
 
 
 def _depth_reading(rows: Sequence[Mapping[str, Any]], metric: str) -> str:
-    """State what a depth-by-budget figure shows, computed from the rows it plots.
-
-    A hand-written sentence is correct only for the generator it was written about. Once
-    a second generator is ablated the same prose would be reprinted beside different
-    numbers, which is a fabricated interpretation rather than a missing one.
-    """
-
+    """State what a depth-by-budget figure shows, computed from the rows it plots."""
     points = [
         (
             float(row["adaptation_percentage"]),
@@ -176,7 +144,6 @@ def _depth_reading(rows: Sequence[Mapping[str, Any]], metric: str) -> str:
 
 def _efficiency_reading(rows: Sequence[Mapping[str, Any]], metric: str) -> str:
     """Compare the cheapest and most expensive depth on the same budget, from the rows."""
-
     points = [
         (int(row["trainable_parameters"]), float(row[metric]), float(row["adaptation_percentage"]))
         for row in rows
@@ -227,13 +194,7 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
     destination.mkdir(parents=True, exist_ok=True)
 
     def held_out_of(record: Any) -> str | None:
-        """The generator a run actually held out, read from its own metrics file.
-
-        Never inherited from another run: once more than one leave-one-generator-out
-        condition exists, taking the newest run's generator would mislabel the recovery
-        and ablation figures, which belong to whichever generator they were fitted on.
-        """
-
+        """The generator a run actually held out, read from its own metrics file."""
         if record is None:
             return None
         stored = load_metrics(record).get("held_out_generator") or record.held_out_generator
@@ -243,14 +204,7 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
     default_rows = _cell_rows(consolidated, "default")
 
     def zero_reference(run_id: str | None, metric: str) -> float | None:
-        """The 0%-adaptation value of ONE run, never pooled across runs.
-
-        Each run recomputes its own 0% reference from its own starting checkpoint on its
-        own held-out generator. Once more than one generator has a recovery run, taking
-        the first 0% row found would draw, say, the biggan reference line across a vqdm
-        figure -- a fabricated comparison rather than a missing one.
-        """
-
+        """The 0%-adaptation value of ONE run, never pooled across runs."""
         if run_id is None:
             return None
         return next(
@@ -264,14 +218,10 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             None,
         )
 
-    # ---------------------------------------------------- 4.2 degradation
     degradation = degradation_rows(consolidated)
     if degradation and unseen_runs:
         covered = sorted({str(row["held_out_generator"]) for row in degradation})
         subsection = f"4.2 Generalisation to unseen generators ({', '.join(covered)})"
-        # Interpretation is computed from the rows actually plotted, never written by
-        # hand: a hard-coded number silently becomes a fabricated one as soon as another
-        # held-out generator is added.
         drops = {
             (str(row["held_out_generator"]), str(row["metric"])): row["absolute_drop"]
             for row in degradation
@@ -344,9 +294,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             )
         )
 
-    # ---------------------------------------------------- 4.3 recovery (head-only)
-    # One figure PER recovery run. Reporting only the newest would silently drop an
-    # earlier generator's curve from the chapter as soon as a second one is run.
     for recovery_run in recovery_runs:
         generator = held_out_of(recovery_run)
         recovery_rows = [row for row in default_rows if row.get("run_id") == recovery_run.run_id]
@@ -399,10 +346,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 )
             )
 
-    # ---------------------------------------------------- 4.4-4.7, once per ablation
-    # One depth study per ablation run. Reporting only the newest would silently delete
-    # an earlier generator's depth comparison from the chapter the moment a second
-    # generator is ablated, which is the same failure the recovery loop above avoids.
     for ablation in ablations:
         ablation_generator = held_out_of(ablation)
         suffix = f"_{ablation_generator}"
@@ -410,10 +353,7 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             metric: zero_reference(ablation.run_id, metric)
             for metric in ("roc_auc", "average_precision", "f1", "accuracy")
         }
-        # ---------------------------------------------------- 4.4 depth comparison
         ablation_default = [row for row in default_rows if row.get("run_id") == ablation.run_id]
-        # Read the actual per-depth rates out of the run rather than restating the ones a
-        # previous ablation happened to use; the override is a declared fairness caveat.
         rates = sorted(
             {
                 (str(row.get("fine_tune_mode")), float(row["learning_rate"]))
@@ -488,7 +428,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 )
             )
 
-        # Validation trajectories at the mechanism budget: convergence, not loss dumps.
         trajectories: dict[str, list[dict[str, Any]]] = {}
         selected: dict[str, int] = {}
         metrics_payload = load_metrics(ablation)
@@ -534,7 +473,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 )
             )
 
-        # ------------------------------------- 4.5 why ROC-AUC saturates but F1@0.5 differs
         sweeps: dict[str, Any] = {}
         sweep_peaks: dict[str, tuple[float, float, float]] = {}
         missed_fakes: dict[str, tuple[int, int]] = {}
@@ -549,8 +487,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
             labels, scores = _read_predictions(path)
             sweep = threshold_sweep(labels, scores, metric="f1")
             sweeps[mode] = sweep
-            # Peak F1, the threshold it occurs at, and F1 at the fixed 0.5 prior, so the
-            # figure's caption states the separation it actually shows.
             grid, values = sweep
             peak = max(range(len(values)), key=lambda i: values[i])
             half = min(range(len(grid)), key=lambda i: abs(grid[i] - 0.5))
@@ -634,7 +570,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 )
             )
 
-        # ---------------------------------------------------- 4.6 parameter efficiency
         adapted = [
             row
             for row in default_rows
@@ -669,7 +604,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 )
             )
 
-        # ---------------------------------------------------- 4.4/4.9 summary table
         summary_rows: list[list[Any]] = []
         by_key: dict[tuple[str, float], dict[str, Mapping[str, Any]]] = {}
         for row in consolidated:
@@ -697,9 +631,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                     f"{budget * 100:g}%",
                     default.get("trainable_parameters"),
                     default.get("labelled_images_consumed"),
-                    # Rendered in scientific notation: the per-depth learning rates differ by
-                    # two orders of magnitude, and fixed-point rounding would print 1e-05 as
-                    # 0.0000 and hide the very confound this column exists to disclose.
                     (
                         None
                         if default.get("learning_rate") is None
@@ -749,11 +680,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                 )
             )
 
-        # ---------------------------------------------------- 4.7 reproduction check
-        # The ablation refits head-only cells that an earlier recovery run already fitted, so
-        # the two can be compared -- but only for the SAME held-out generator. Pairing the
-        # ablation against whichever recovery run happens to be newest would compare cells
-        # fitted on different generators and report the difference as non-determinism.
         matching_recovery = next(
             (run for run in recovery_runs if held_out_of(run) == ablation_generator), None
         )
@@ -793,7 +719,6 @@ def build(destination: Path, output_root: Path) -> list[Artefact]:
                     )
                 )
 
-    # ---------------------------------------------------- inventory
     artefacts.append(
         _write_table(
             [
@@ -883,7 +808,7 @@ def write_manifest(artefacts: Sequence[Artefact], destination: Path, output_root
     lines += [f"- `{run_id}`" for run_id in sorted(usable)]
     if excluded:
         lines += ["", "## Runs excluded (contribute nothing to any figure)", ""]
-        lines += [f"- `{item['run_id']}` — {item['reason']}" for item in excluded]
+        lines += [f"- `{item['run_id']}`: {item['reason']}" for item in excluded]
     lines += ["", "## Artefacts", ""]
     current = None
     for artefact in artefacts:

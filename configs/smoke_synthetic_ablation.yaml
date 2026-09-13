@@ -1,17 +1,4 @@
-# ============================================================================
-# PIPELINE SMOKE TEST -- NOT A RESEARCH CONFIGURATION
-# ============================================================================
-# Fine-tuning-depth ablation against the SYNTHETIC fixture. Reduced to one subset
-# seed and one training seed (3 modes x 4 budgets = 12 cells) so all three freeze
-# depths can be verified on CPU. Research runs use the full seed lists.
-#
-# last_block and full adaptation get a smaller learning rate: the shared 1e-3 used
-# for the linear head would wreck pretrained CLIP weights. That makes the budget
-# unequal in learning rate but not in epochs, and the runner records the override
-# in ablation_metrics.json as a fairness caveat.
-#
-# Metrics from this config are NOT research results.
-# ============================================================================
+# Synthetic pipeline check. Do not report these metrics as research results.
 
 base_config: base.yaml
 

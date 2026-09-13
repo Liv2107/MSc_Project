@@ -1,30 +1,6 @@
-# Leave-one-generator-out on Tiny GenImage, holding out vqdm.
-# Produces the 0%-adaptation reference for a vqdm recovery curve.
-#
-# WHY vqdm IS THE SECOND HELD-OUT GENERATOR.
-#
-# The completed biggan condition measured only a small generalisation gap (ROC-AUC
-# 0.9374 in-distribution vs 0.9284 unseen, a drop of 0.0090), which is too small to
-# support a claim about how detectors degrade on unseen generators. biggan is in fact
-# the EASIEST generator in this dataset for the in-distribution detector
-# (per-generator ROC-AUC 0.9761 in the all-seven baseline), so it was close to a
-# best case rather than a representative one.
-#
-# vqdm is the hardest generator in the same baseline (per-generator ROC-AUC 0.8652,
-# PR-AUC 0.4689, recall 0.6920 -- markedly worse than every other generator even when
-# it IS in the training set), and it is the most architecturally distinct: the training
-# set retains pixel-space diffusion (adm, glide), continuous-latent diffusion
-# (stable_diffusion_v1_5, wukong, midjourney) and a GAN (biggan), but no other discrete
-# / vector-quantised diffusion model. Holding out wukong instead would leave its close
-# sibling stable_diffusion_v1_5 in training, which would depress the measured gap for a
-# reason that is about family resemblance rather than about generalisation.
-#
-# vqdm therefore maximises the chance of measuring a genuine degradation, which is the
-# prerequisite for spending compute on any recovery or depth experiment.
-#
-# The final test set is built balanced 50/50 (all vqdm test fakes plus an equal number
-# of reals from a FIXED real pool shared across held-out generators), so precision, F1,
-# and PR-AUC are comparable against the biggan condition and the in-distribution set.
+# Hold out vqdm from training and model selection.
+# The balanced test set uses the fixed real-image pool shared across generators.
+# Selection rationale: docs/experiment-design.md.
 
 base_config: tiny_genimage_base.yaml
 

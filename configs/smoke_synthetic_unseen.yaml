@@ -1,13 +1,4 @@
-# ============================================================================
-# PIPELINE SMOKE TEST -- NOT A RESEARCH CONFIGURATION
-# ============================================================================
-# Leave-one-generator-out against the SYNTHETIC fixture. Holds out biggan, whose
-# periodic artefact frequency differs from every training generator, so the
-# protocol's leakage assertions and generalisation-gap arithmetic are exercised
-# on data where a real drop is possible.
-#
-# Metrics from this config are NOT research results.
-# ============================================================================
+# Synthetic pipeline check. Do not report these metrics as research results.
 
 base_config: base.yaml
 

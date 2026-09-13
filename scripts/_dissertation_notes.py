@@ -1,13 +1,4 @@
-"""Compose RESULTS_NOTES.md for dissertation drafting.
-
-Every number in the rendered document is looked up from the saved runs at render time
-through :mod:`src.evaluation.dissertation`. Nothing is typed in as a literal, so the
-note cannot drift from the data the way a hand-maintained summary does.
-
-Empirical fact and interpretation are kept in separate, labelled blocks throughout:
-a line under **Fact** is a measured or arithmetically derived number; a line under
-**Interpretation** is a reading of it that a reader may disagree with.
-"""
+"""Compose RESULTS_NOTES.md for dissertation drafting."""
 
 from __future__ import annotations
 
@@ -32,9 +23,6 @@ def _fmt(value: Any, places: int = 4) -> str:
     if isinstance(value, int):
         return f"{value:,}"
     return str(value)
-
-
-# --------------------------------------------------------------------------- sections
 
 
 def _headline(ctx: D.Context) -> str:
@@ -81,7 +69,7 @@ def _headline(ctx: D.Context) -> str:
         "   same training set size, same architecture.",
         "",
         "2. **On the generator with real headroom, adaptation depth determines what is",
-        "   reachable at all — not merely how fast it is reached.**",
+        "   reachable at all: not merely how fast it is reached.**",
     ]
     if full_95 and head_95:
         lines += [
@@ -117,7 +105,7 @@ def _headline(ctx: D.Context) -> str:
             f" {f1_gap['left_labelled_fakes']} labelled VQDM images instead of"
             f" {f1_gap['right_labelled_fakes']}.",
             "   On ROC-AUC the same pair differs by only +0.0014, which is below the",
-            "   reliability floor — see the caution in section 12.",
+            "   reliability floor: see the caution in section 12.",
         ]
     confusion = {r["label"]: r for r in D.confusion_selection(ctx) if r.get("available")}
     cheap_deep = confusion.get("VQDM 5% full")
@@ -723,7 +711,6 @@ def _chapter_mapping(ctx: D.Context) -> str:
 
 def _external_run(ctx: D.Context) -> dict[str, Any] | None:
     """The executed external challenge, if one exists under the output root."""
-
     from scripts.build_dissertation_results import _executed_external_challenge
 
     return _executed_external_challenge(ctx.output_root)
@@ -731,7 +718,6 @@ def _external_run(ctx: D.Context) -> dict[str, Any] | None:
 
 def _external_status_block(ctx: D.Context) -> list[str]:
     """State plainly whether the external challenge has been run, and on what."""
-
     run = _external_run(ctx)
     if run is None:
         return ["**Status: proposed. Nothing has been generated, called, or evaluated.**", ""]
@@ -955,15 +941,8 @@ def _external_section(ctx: D.Context) -> str:
     )
 
 
-# ------------------------------------------------------------------- figure shortlist
-
-
 def figure_shortlist(ctx: D.Context) -> list[dict[str, Any]]:
-    """The 6-10 artefacts worth carrying into the dissertation, ranked.
-
-    Computed takeaways so the recommendation cannot cite a number the run does not hold.
-    """
-
+    """The 6-10 artefacts worth carrying into the dissertation, ranked."""
     synthesis = {r["held_out_generator"]: r for r in D.cross_generator_synthesis(ctx)}
     attainment = D.first_budget_reaching(ctx)
     comparisons = D.depth_comparisons(ctx)
@@ -1010,7 +989,6 @@ def figure_shortlist(ctx: D.Context) -> list[dict[str, Any]]:
         step="0%->5%",
     )
 
-    # Efficiency ratios, computed once so the takeaway string stays readable.
     data_ratio = (
         eff_full["gain_per_labelled_fake"] / eff_head["gain_per_labelled_fake"]
         if eff_head and eff_full and eff_head["gain_per_labelled_fake"]

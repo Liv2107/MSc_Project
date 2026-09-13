@@ -1,27 +1,4 @@
-"""Leave-one-generator-out generalisation experiment.
-
-Train on the known generators and evaluate on a held-out generator that is absent from
-training and from model selection. The drop relative to the in-distribution reference
-estimates how well the learned cues transfer to a new generation process.
-
-The persisted split file is used unchanged, so every run draws from identical samples.
-The protocol's partitions are derived from it:
-
-* development train      -- split ``train``, fakes restricted to the known generators,
-                            plus the shared real pool.
-* development validation -- split ``validation``, same restriction. Used for checkpoint
-                            selection and the decision threshold.
-* adaptation pool        -- split ``train``, fakes from the held-out generator only.
-                            Untouched here; it exists for the recovery experiment.
-* final unseen test      -- split ``test``, fakes from the held-out generator plus the
-                            fixed real test pool.
-
-Because the importer guarantees that no ``source_group`` crosses the official train/val
-boundary, the adaptation pool and the final unseen test are provenance disjoint. Both
-that and the absence of held-out fakes from development are asserted at runtime.
-
-The result saved here is the 0%-adaptation point of the recovery curve.
-"""
+"""Leave-one-generator-out generalisation experiment."""
 
 from __future__ import annotations
 
@@ -56,12 +33,8 @@ from src.utils.config import load_config
 
 LOGGER = logging.getLogger(__name__)
 
-# Candidate operating points considered when selecting a threshold on validation data.
 THRESHOLD_GRID = tuple(index / 100 for index in range(1, 100))
 
-# Fixed, deliberately NOT derived from reproducibility.seed. The real half of the final
-# test set must be the same images for every held-out generator and every run, otherwise
-# cross-generator numbers are computed on different negatives and stop being comparable.
 REAL_TEST_POOL_SEED = 20260808
 
 THRESHOLD_PROVENANCE_DEFAULT = "fixed_prior_from_config_model.decision_threshold"
@@ -76,20 +49,7 @@ def build_balanced_final_test(
     *,
     unseen_generator: str,
 ) -> tuple[list[DatasetRecord], dict[str, Any]]:
-    """Build a class-balanced final test set for one held-out generator.
-
-    Takes every held-out-generator fake in the ``test`` split and an equal number of real
-    test images. Precision, F1, and PR-AUC all depend on class prevalence, so comparing
-    them between an in-distribution test set and an unseen test set with different
-    prevalence would report an arithmetic artefact as a generalisation gap. Balancing
-    both sides at 50% removes that confound.
-
-    The real half is chosen deterministically from a seeded shuffle of the sorted real
-    test IDs using a fixed pool seed, so the SAME real images are used for every held-out
-    generator. Real images carry no generator identity, so sharing them introduces no
-    leakage; it is what makes cross-generator comparisons meaningful.
-    """
-
+    """Build a class-balanced final test set for one held-out generator."""
     fakes = sorted(
         (
             record
@@ -143,13 +103,7 @@ def build_balanced_in_distribution_test(
     known_generators: Sequence[str],
     fake_count: int,
 ) -> tuple[list[DatasetRecord], dict[str, Any]]:
-    """Build an in-distribution test set balanced to match the unseen one.
-
-    Uses the identical fixed real pool and the same number of fakes as the unseen test,
-    so the in-distribution and unseen numbers are computed at the same prevalence and the
-    difference between them is attributable to the generator rather than to class balance.
-    """
-
+    """Build an in-distribution test set balanced to match the unseen one."""
     allowed = set(known_generators)
     fake_pool = sorted(
         (
@@ -192,7 +146,6 @@ def build_balanced_in_distribution_test(
 
 def validate_unseen_protocol(config: Mapping[str, Any]) -> tuple[str, list[str]]:
     """Confirm exactly one held-out generator that is absent from development data."""
-
     generators = config["generators"]
     unseen = generators.get("unseen")
     if not isinstance(unseen, str) or not unseen.strip():
@@ -214,9 +167,6 @@ def validate_unseen_protocol(config: Mapping[str, Any]) -> tuple[str, list[str]]
     protocol = config.get("unseen_protocol") or {}
     if "adaptation_fraction" in protocol:
         declared = float(protocol["adaptation_fraction"])
-        # This runner uses the held-out generator's ENTIRE official-train slice as the
-        # adaptation pool. A config declaring anything else would describe a partition
-        # that never happens, so it is rejected rather than silently ignored.
         if declared != 1.0:
             raise ValueError(
                 "unseen_protocol.adaptation_fraction must be 1.0: the adaptation pool is "
@@ -230,15 +180,7 @@ def validate_unseen_protocol(config: Mapping[str, Any]) -> tuple[str, list[str]]
 def assert_unseen_absent_from_development(
     selections: Mapping[str, Sequence[DatasetRecord]], *, unseen_generator: str
 ) -> None:
-    """Fail loudly if any held-out fake sample reached a model-development selection.
-
-    The invariant is about what the model actually sees, not about the split file. The
-    held-out generator's samples do legitimately sit inside the ``train`` split — that
-    is where the adaptation pool comes from — so membership of a split proves nothing.
-    What must never happen is such a sample entering the data used for gradient steps,
-    checkpoint selection, early stopping, or threshold selection.
-    """
-
+    """Fail loudly if any held-out fake sample reached a model-development selection."""
     violations: dict[str, list[str]] = {}
     for name, records in selections.items():
         offenders = [
@@ -259,7 +201,6 @@ def assert_pools_group_disjoint(
     adaptation: Sequence[DatasetRecord], final_test: Sequence[DatasetRecord]
 ) -> None:
     """Assert the adaptation pool and final test share no provenance group or sample."""
-
     adaptation_groups = {record.source_group for record in adaptation if record.source_group}
     test_groups = {record.source_group for record in final_test if record.source_group}
     shared_groups = sorted(adaptation_groups.intersection(test_groups))
@@ -282,13 +223,7 @@ def select_threshold_on_validation(
     device: Any,
     metric: str = "f1",
 ) -> tuple[float, float]:
-    """Choose a decision threshold using development validation scores only.
-
-    Returns the selected threshold and its validation metric value. This runs before
-    any unseen test label is read, so the operating point cannot be tuned on the
-    held-out generator.
-    """
-
+    """Choose a decision threshold using development validation scores only."""
     if metric not in {"f1", "accuracy"}:
         raise ValueError("threshold selection metric must be f1 or accuracy")
     transform = build_transforms(config, training=False)
@@ -311,20 +246,12 @@ def select_threshold_on_validation(
         value = metrics.f1 if metric == "f1" else metrics.accuracy
         if value > best_value:
             best_threshold, best_value = float(candidate), float(value)
-    # Confirm the reported threshold reproduces the scored decisions it claims to.
     threshold_scores(scores, threshold=best_threshold)
     return best_threshold, best_value
 
 
 def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) -> Path:
-    """Train without one generator and evaluate its untouched final partition.
-
-    ``resume_from`` names the output directory of an interrupted run of this same
-    config; training continues from its last completed epoch. The held-out partitions
-    are rebuilt deterministically from the persisted split file, so resuming cannot
-    change which samples the final evaluation scores.
-    """
-
+    """Train without one generator and evaluate its untouched final partition."""
     loaded = load_config(config_path)
     if loaded.values["experiment"]["type"] != "unseen_generator":
         raise ValueError("run_unseen_generator requires experiment.type=unseen_generator")
@@ -351,8 +278,6 @@ def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) 
             fake_generators=list(config["generators"]["validation"]),
             include_real=include_real,
         )
-        # The held-out generator's official-train fakes form the adaptation pool. It is
-        # loaded here only to prove it stays disjoint from the final test partition.
         adaptation_pool = [
             record
             for record in bundle.records
@@ -360,21 +285,14 @@ def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) 
             and record.generator == unseen
             and bundle.split_by_id[record.sample_id] == "train"
         ]
-        # Balanced 50/50 with a fixed real pool: see build_balanced_final_test for why
-        # prevalence must match before any gap is attributed to the generator.
         final_test_records, final_test_metadata = build_balanced_final_test(
             bundle.records, bundle.split_by_id, unseen_generator=unseen
         )
         assert_pools_group_disjoint(adaptation_pool, final_test_records)
-        # Training, checkpoint selection, early stopping, and threshold selection all
-        # draw from these two selections and nothing else.
         assert_unseen_absent_from_development(
             {"train": train_records, "validation": validation_records},
             unseen_generator=unseen,
         )
-        # The held-out generator's official-val fakes are deliberately unused: the final
-        # test partition is drawn from that same official slice, so leaving them out
-        # keeps the adaptation pool anchored to official training data.
         unused_held_out = [
             record.sample_id
             for record in bundle.records
@@ -439,7 +357,6 @@ def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) 
         best_checkpoint = load_checkpoint(best_checkpoint_path, map_location=str(context.device))
         model.load_state_dict(best_checkpoint["model_state"], strict=True)
 
-        # Operating point fixed on development validation, before any unseen test label.
         selected_threshold, threshold_metric = select_threshold_on_validation(
             model=model,
             records=validation_records,
@@ -453,8 +370,6 @@ def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) 
             threshold_metric,
         )
 
-        # Report at the configured default threshold and at the validation-selected one.
-        # Neither is tuned on the held-out generator.
         outcome = evaluate_records(
             model=model,
             records=final_test_records,
@@ -470,9 +385,6 @@ def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) 
             labels, scores, threshold=selected_threshold
         )
 
-        # Same trained model measured on the in-distribution test split, balanced to the
-        # same prevalence and drawn from the same real pool, so the unseen drop is read
-        # against a genuinely comparable number rather than a prior run.
         in_distribution_records, in_distribution_metadata = build_balanced_in_distribution_test(
             bundle.records,
             bundle.split_by_id,
@@ -518,7 +430,6 @@ def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) 
                     "held_out_samples_used": 0,
                 },
             },
-            # Retained for backward compatibility with already-saved runs and the report.
             "decision_threshold_default": float(config["model"]["decision_threshold"]),
             "decision_threshold_validation_selected": selected_threshold,
             "validation_threshold_score": threshold_metric,
@@ -545,10 +456,6 @@ def run_unseen_generator(config_path: Path, *, resume_from: Path | None = None) 
                     name: asdict(metrics) for name, metrics in in_distribution.per_generator.items()
                 },
             },
-            # Both test sets are balanced 50/50 over the same real pool, so these are
-            # computed at equal prevalence. Threshold-free metrics are reported first
-            # because a fixed-threshold gap on an unseen generator largely measures
-            # calibration drift rather than detection ability.
             "generalisation_gap": {
                 "prevalence_matched": True,
                 "unseen_prevalence": final_test_metadata["positive_prevalence"],

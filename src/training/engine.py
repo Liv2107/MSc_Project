@@ -34,8 +34,6 @@ from src.training.resume import (
 
 LOGGER = logging.getLogger(__name__)
 
-# How many progress lines to emit per epoch. Long epochs would otherwise run for many
-# minutes in total silence, leaving no way to tell a slow run from a hung one.
 PROGRESS_UPDATES_PER_EPOCH = 10
 
 
@@ -48,7 +46,6 @@ class EpochResult:
 
 def _format_duration(seconds: float) -> str:
     """Render a duration as H:MM:SS or M:SS, whichever is shorter to read."""
-
     if not math.isfinite(seconds) or seconds < 0:
         return "unknown"
     total = int(round(seconds))
@@ -61,7 +58,6 @@ def _format_duration(seconds: float) -> str:
 
 def _batch_total(data_loader: Any) -> int | None:
     """Number of batches, when the loader can report it."""
-
     try:
         return len(data_loader)
     except TypeError:
@@ -271,14 +267,7 @@ def _restore_for_resume(
     device: torch.device | str,
     loader_generator: torch.Generator | None,
 ) -> TrainingState:
-    """Put an interrupted run back exactly where it stopped, or refuse to continue.
-
-    Every failure here is raised rather than worked around. Silently restarting, or
-    continuing from a half-written state, would produce a run whose reported epoch
-    count does not describe the optimisation that actually happened -- which is worse
-    than losing the interrupted run.
-    """
-
+    """Put an interrupted run back exactly where it stopped, or refuse to continue."""
     if not state_path.is_file() or not last_path.is_file():
         raise FileNotFoundError(
             f"cannot resume: {last_path.name} and {state_path.name} must both exist in "
@@ -341,16 +330,7 @@ def fit(
     progress_label: str = "",
     resume: bool = False,
 ) -> dict[str, Any]:
-    """Train for ``epochs`` epochs, selecting on validation only.
-
-    With ``resume=True`` the run continues from the last epoch recorded in
-    ``output_dir`` instead of starting at epoch 1: model, optimiser, scheduler, scaler,
-    history, best score, early-stopping counters, and generator positions are all
-    restored from ``last_checkpoint.pt`` plus the ``training_state.json`` sidecar. A
-    ``resume=False`` call behaves exactly as it always has, and any run that reaches the
-    end deletes the sidecar, so a completed run directory is unchanged by this feature.
-    """
-
+    """Train for ``epochs`` epochs, selecting on validation only."""
     if type(epochs) is not int or epochs <= 0:
         raise ValueError("epochs must be positive")
     if checkpoint_metric not in {
@@ -372,8 +352,6 @@ def fit(
     best_epoch: int | None = None
     start_epoch = 1
     resumed_from_epochs: list[int] = []
-    # The generator the training loader shuffles with. It advances across epochs, so it
-    # is part of "where the run got to" and is snapshotted with the other generators.
     loader_generator = getattr(train_loader, "generator", None)
     selection_mode = "min" if checkpoint_metric == "loss" else "max"
     model_name = str(getattr(getattr(model, "backbone", None), "model_name", type(model).__name__))
@@ -489,8 +467,6 @@ def fit(
             best_score, best_epoch = float(score), epoch
             save_checkpoint(checkpoint, best_path)
 
-        # Per-epoch summary. The ETA extrapolates from the mean completed epoch and is an
-        # upper bound: early stopping can end the run sooner, never later.
         epoch_durations.append(time.perf_counter() - epoch_started)
         mean_epoch = sum(epoch_durations) / len(epoch_durations)
         remaining_epochs = epochs - epoch
@@ -512,9 +488,6 @@ def fit(
             if remaining_epochs
             else "  (final epoch)",
         )
-        # Written after the checkpoint, so the sidecar can never claim an epoch whose
-        # weights were not persisted. The reverse gap (checkpoint newer than sidecar) is
-        # detected and refused on resume rather than silently mixing two epochs.
         save_training_state(
             TrainingState(
                 epoch=epoch,
@@ -560,9 +533,6 @@ def fit(
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(history)
-    # Training reached its end, so there is nothing left to resume. Removing the sidecar
-    # keeps a finished run directory identical to one produced before resume existed,
-    # and makes the file's presence an unambiguous "this run stopped part-way" marker.
     state_path.unlink(missing_ok=True)
     return {
         "best_checkpoint": best_path,

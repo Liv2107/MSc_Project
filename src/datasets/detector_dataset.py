@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import math
-import random
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,8 +63,6 @@ class AIDetectionDataset(Dataset[dict[str, object]]):
         record = self.records[index]
         try:
             with Image.open(record.image_path) as handle:
-                # exif_transpose returns a new Image, not the ImageFile it was given, so
-                # it is bound to its own name rather than shadowing the context manager's.
                 image = ImageOps.exif_transpose(handle).convert("RGB")
                 pixel_values = self.transform(image)
         except Exception as exc:
@@ -192,18 +188,3 @@ def filter_records(
     if not selected:
         raise ValueError("filters selected no records")
     return selected
-
-
-def random_subset_indices(population_size: int, fraction: float, *, seed: int) -> list[int]:
-    if type(population_size) is not int or population_size < 0:
-        raise ValueError("population_size must be a non-negative integer")
-    if not math.isfinite(fraction) or not 0 < fraction <= 1:
-        raise ValueError("fraction must be in (0, 1]")
-    if type(seed) is not int or seed < 0:
-        raise ValueError("seed must be a non-negative integer")
-    if population_size == 0:
-        return []
-    count = max(1, math.ceil(population_size * fraction))
-    order = list(range(population_size))
-    random.Random(seed).shuffle(order)
-    return sorted(order[:count])

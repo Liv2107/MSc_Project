@@ -1,18 +1,4 @@
-"""Limited-data fine-tuning recovery experiment.
-
-How much can the detector recover on an unseen generator using limited labelled data
-from it? Budgets are 5%, 10%, 20%, and 50% of a predefined adaptation pool, never of the
-final test set. Sample counts are reported alongside the percentages, because identical
-percentages can represent very different amounts of evidence.
-
-Limited labelled data has to cover model selection too, so the adaptation pool is split
-once, group-safely, into adaptation-train and adaptation-validation pools. Each budget
-takes nested prefixes from both. The reported budget therefore covers every labelled
-image the run consumed, and the 5% subsets sit inside the 10% subsets.
-
-Every cell reloads the same untouched starting checkpoint: the budgets are independent
-conditions, not a continual-learning sequence.
-"""
+"""Limited-data fine-tuning recovery experiment."""
 
 from __future__ import annotations
 
@@ -71,7 +57,6 @@ THRESHOLD_PROVENANCE_ADAPTATION = (
 @dataclass(frozen=True, slots=True)
 class AdaptationBudget:
     """One limited-label condition and its reproducible sample identity."""
-
     fraction: float
     subset_seed: int
     train_sample_ids: tuple[str, ...] = ()
@@ -105,13 +90,7 @@ GroupList = tuple[tuple[str, tuple[str, ...]], ...]
 
 @dataclass(frozen=True, slots=True)
 class AdaptationPools:
-    """The one-time, group-safe division of the adaptation pool.
-
-    Both pools stay keyed by class label. Budgets are drawn per class so that even the
-    smallest percentage contains real and fake images; a single shuffled prefix over
-    both classes could otherwise yield a one-class training set.
-    """
-
+    """The one-time, group-safe division of the adaptation pool."""
     train_groups: Mapping[int, GroupList]
     validation_groups: Mapping[int, GroupList]
     by_id: Mapping[str, DatasetRecord] = field(default_factory=dict)
@@ -125,7 +104,6 @@ def _grouped_by_class(
     records: Sequence[DatasetRecord],
 ) -> dict[int, list[tuple[str, tuple[str, ...]]]]:
     """Collect sample IDs into provenance groups, keyed by class label."""
-
     per_class: dict[int, dict[str, list[str]]] = {0: {}, 1: {}}
     for record in records:
         per_class[record.label].setdefault(_group_key(record), []).append(record.sample_id)
@@ -144,12 +122,7 @@ def split_adaptation_pool(
     validation_fraction: float,
     seed: int,
 ) -> AdaptationPools:
-    """Divide the adaptation pool once into train and validation pools.
-
-    The division is group-safe and class-stratified, and happens before any budget is
-    applied so that every budget draws from the same two fixed pools.
-    """
-
+    """Divide the adaptation pool once into train and validation pools."""
     if not 0 < validation_fraction < 1:
         raise ValueError("adaptation_validation_fraction must be in (0, 1)")
     if type(seed) is not int or seed < 0:
@@ -188,14 +161,7 @@ def _nested_prefixes(
     seed: int,
     stratum: str,
 ) -> dict[float, list[str]]:
-    """Shuffle groups once per class, then take increasing prefixes so subsets nest.
-
-    Rounding rule: ``ceil(group_count * fraction)`` per class, floored at one group, so
-    the smallest budget is never empty and never one-class. Actual counts are always
-    reported alongside the nominal percentage because the two are not interchangeable.
-    Selecting within each class independently preserves both nesting and group integrity.
-    """
-
+    """Shuffle groups once per class, then take increasing prefixes so subsets nest."""
     shuffled: dict[int, list[tuple[str, tuple[str, ...]]]] = {}
     for label, groups in sorted(groups_by_class.items()):
         order = list(groups)
@@ -221,7 +187,6 @@ def build_nested_adaptation_subsets(
     final_test_records: Sequence[DatasetRecord] = (),
 ) -> dict[float, AdaptationBudget]:
     """Return nested sample-ID sets for fair data-budget comparison."""
-
     ordered = list(fractions)
     if not ordered:
         raise ValueError("at least one adaptation fraction is required")
@@ -254,7 +219,6 @@ def build_nested_adaptation_subsets(
             train_sample_ids=tuple(train_selection[fraction]),
             validation_sample_ids=tuple(validation_selection[fraction]),
         )
-    # Nesting is a contract the recovery curve depends on; verify it rather than trust it.
     for smaller, larger in zip(ordered, ordered[1:], strict=False):
         for attribute in ("train_sample_ids", "validation_sample_ids"):
             small = set(getattr(budgets[smaller], attribute))
@@ -274,7 +238,6 @@ def save_adaptation_subsets(
     budgets: Mapping[int, Mapping[float, AdaptationBudget]], destination: Path
 ) -> None:
     """Persist subset IDs so ablations reuse exactly the same labelled images."""
-
     payload = {
         str(subset_seed): {
             f"{fraction:.2f}": {
@@ -296,7 +259,6 @@ def save_adaptation_subsets(
 
 def load_adaptation_subsets(source: Path) -> dict[int, dict[float, AdaptationBudget]]:
     """Reload persisted subset IDs, used by the ablation to control the data exactly."""
-
     raw = json.loads(source.read_text(encoding="utf-8"))
     restored: dict[int, dict[float, AdaptationBudget]] = {}
     for subset_seed, per_seed in raw.items():
@@ -314,7 +276,6 @@ def load_adaptation_subsets(source: Path) -> dict[int, dict[float, AdaptationBud
 
 def resolve_starting_checkpoint(config: Mapping[str, Any], source_path: Path) -> Path:
     """Locate the 0%-adaptation checkpoint every cell must start from."""
-
     settings = config.get("fine_tuning") or {}
     declared = settings.get("starting_checkpoint")
     if not declared:
@@ -339,7 +300,6 @@ def assert_starting_checkpoint_compatible(
     manifest_sha256: str | None,
 ) -> dict[str, Any]:
     """Refuse a starting checkpoint that came from an incomparable setup."""
-
     stored = checkpoint.get("resolved_config") or {}
     findings: dict[str, Any] = {"warnings": []}
     stored_model = (stored.get("model") or {}).get("clip_model_name")
@@ -351,12 +311,6 @@ def assert_starting_checkpoint_compatible(
     stored_revision = (stored.get("model") or {}).get("clip_revision")
     if stored_revision and stored_revision != config["model"].get("clip_revision"):
         raise ValueError("starting checkpoint was trained against a different CLIP revision")
-    # The classifier architecture must match. A linear and a cosine head both expose
-    # ``classifier.classifier.{weight,bias}``, so a cosine checkpoint loads into a linear
-    # detector without a shape error: only the extra ``log_scale`` is missing, and
-    # ``strict=True`` catches that direction but not the reverse. Adapting one head's
-    # weights under the other head's forward pass would silently change what the
-    # 0%-adaptation origin of the recovery curve actually is, so it is refused here.
     stored_head = str((stored.get("model") or {}).get("head_type") or "linear")
     expected_head = str(config["model"].get("head_type", "linear"))
     if stored_head != expected_head:
@@ -400,7 +354,6 @@ def _records_for_ids(
 @dataclass(frozen=True, slots=True)
 class CellResult:
     """One (freeze mode, budget, subset seed, training seed) measurement."""
-
     record: dict[str, Any]
     predictions_path: Path
 
@@ -422,12 +375,7 @@ def run_adaptation_cell(
     learning_rate: float | None = None,
     epochs: int | None = None,
 ) -> CellResult:
-    """Fine-tune one independent condition and score the fixed final test partition.
-
-    Always reloads ``starting_checkpoint_path`` so budgets stay independent conditions
-    rather than a continual-learning chain.
-    """
-
+    """Fine-tune one independent condition and score the fixed final test partition."""
     logger = logging.getLogger(f"ai_detector.{context.run_id}")
     cell_dir = context.run_dir / "cells" / cell_id
     cell_dir.mkdir(parents=True, exist_ok=False)
@@ -447,9 +395,6 @@ def run_adaptation_cell(
                 f"{present_classes}; the budget is too small to contain both classes"
             )
     assert_pools_group_disjoint(train_records + validation_records, final_test_records)
-    # The adaptation pool mixes held-out-generator fakes with shared authentic images, so
-    # a bare percentage is ambiguous. Record both counts: the held-out count is the one a
-    # reader means by "labelled images from the new generator".
     budget_records = train_records + validation_records
     held_out_fake_count = sum(1 for record in budget_records if record.label == 1)
     authentic_count = sum(1 for record in budget_records if record.label == 0)
@@ -457,8 +402,6 @@ def run_adaptation_cell(
     model = build_detector(config, device=context.device, fine_tune_mode=fine_tune_mode)
     starting = load_checkpoint(starting_checkpoint_path, map_location=str(context.device))
     model.load_state_dict(starting["model_state"], strict=True)
-    # Freeze policy is applied AFTER loading so the optimiser below only ever receives
-    # parameters this mode is allowed to change.
     configure_trainable_layers(model, fine_tune_mode)
 
     train_transform = build_transforms(config, training=True)
@@ -505,9 +448,6 @@ def run_adaptation_cell(
     best = load_checkpoint(best_path, map_location=str(context.device))
     model.load_state_dict(best["model_state"], strict=True)
 
-    # Operating point selected on adaptation validation ONLY. Those images are part of
-    # this budget's labelled allocation, so the threshold costs nothing that is not
-    # already counted in labelled_images_consumed, and the final test stays untouched.
     adaptation_threshold, adaptation_threshold_score = select_threshold_on_validation(
         model=model,
         records=validation_records,
@@ -529,9 +469,6 @@ def run_adaptation_cell(
     predictions_path = cell_dir / "unseen_test_predictions.csv"
     save_predictions(outcome.predictions, predictions_path)
 
-    # Three operating points on the same saved scores, so a change in F1 between budgets
-    # can be attributed to weight adaptation or to calibration rather than confounding
-    # the two. `overall` stays the config default for continuity with earlier runs.
     test_labels = [item.label for item in outcome.predictions]
     test_scores = [item.score for item in outcome.predictions]
     at_adaptation_threshold = compute_binary_metrics(
@@ -593,9 +530,6 @@ def run_adaptation_cell(
         },
     }
     if not retain_cell_checkpoints:
-        # Each cell checkpoint is a full CLIP copy (~350 MB); a full grid would run to
-        # tens of gigabytes. Predictions, metrics, and the checkpoint digest above are
-        # what the results depend on, so the weights themselves are released here.
         for path in (best_path, Path(result["last_checkpoint"])):
             path.unlink(missing_ok=True)
         logger.info("released cell checkpoints for %s (digests retained)", cell_id)
@@ -611,23 +545,11 @@ def evaluate_starting_checkpoint(
     fine_tune_mode: str,
     seen_validation_records: Sequence[DatasetRecord],
 ) -> tuple[dict[str, Any], float]:
-    """Measure the 0% condition inside this run, with identical evaluation code.
-
-    Recomputing it here rather than reading another run's JSON guarantees the recovery
-    curve's origin was produced by the same code path as every adapted point.
-
-    Also derives the baseline operating threshold from SEEN-generator validation data
-    only. Every adaptation cell is additionally reported at this unchanged threshold, so
-    calibration shift can be separated from weight adaptation. Returns the 0% row and
-    that threshold.
-    """
-
+    """Measure the 0% condition inside this run, with identical evaluation code."""
     model = build_detector(config, device=context.device, fine_tune_mode=fine_tune_mode)
     starting = load_checkpoint(starting_checkpoint_path, map_location=str(context.device))
     model.load_state_dict(starting["model_state"], strict=True)
 
-    # Held-out samples contribute nothing here: seen_validation_records is the
-    # known-generator validation split, asserted free of the held-out generator.
     baseline_threshold, baseline_score = select_threshold_on_validation(
         model=model,
         records=seen_validation_records,
@@ -678,8 +600,6 @@ def evaluate_starting_checkpoint(
         },
         "overall": asdict(outcome.overall),
         "at_baseline_threshold": asdict(at_baseline),
-        # The 0% model has no adaptation validation, so there is no adaptation-selected
-        # operating point; the baseline threshold is the only legitimate one here.
         "at_adaptation_selected_threshold": asdict(at_baseline),
         "per_generator": {
             name: asdict(metrics) for name, metrics in outcome.per_generator.items()
@@ -691,17 +611,7 @@ def evaluate_starting_checkpoint(
 def build_recovery_pools(
     config: Mapping[str, Any], bundle: Any, unseen: str, known: Sequence[str]
 ) -> tuple[list[DatasetRecord], list[DatasetRecord], dict[str, Any]]:
-    """Return the adaptation pool, the fixed final unseen test partition, and its metadata.
-
-    The adaptation pool is the held-out generator's official-train fakes plus the
-    shared real training images, so adaptation sees new-generator evidence against the
-    same negatives the detector already knows.
-
-    The final test set is built by the same balanced-50/50 fixed-real-pool routine the
-    unseen-generator runner uses, so the 0% baseline and every adaptation budget are
-    scored on byte-identical membership at identical prevalence.
-    """
-
+    """Return the adaptation pool, the fixed final unseen test partition, and its metadata."""
     include_real = bool(config["generators"].get("include_real_images", True))
     adaptation_pool = [
         record
@@ -727,7 +637,6 @@ def build_recovery_pools(
 
 def summarise_recovery(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Aggregate cells into a tidy recovery table with across-seed variability."""
-
     grouped: dict[tuple[str, float], list[Mapping[str, Any]]] = {}
     for row in rows:
         key = (str(row["fine_tune_mode"]), float(row["adaptation_percentage"]))
@@ -796,11 +705,9 @@ def _write_cell_table(rows: Sequence[Mapping[str, Any]], destination: Path) -> N
         "training_seconds",
         "best_adaptation_validation_score",
         "starting_checkpoint",
-        # Threshold-free metrics first: they do not depend on the operating point.
         "roc_auc",
         "average_precision",
         "support",
-        # Threshold-dependent metrics, reported at each declared operating point.
         "threshold_default",
         "accuracy",
         "precision",
@@ -849,7 +756,6 @@ def _write_cell_table(rows: Sequence[Mapping[str, Any]], destination: Path) -> N
 
 def run_fine_tuning(config_path: Path) -> Path:
     """Fine-tune the unseen-generator checkpoint at each limited data budget."""
-
     loaded = load_config(config_path)
     if loaded.values["experiment"]["type"] != "fine_tuning":
         raise ValueError("run_fine_tuning requires experiment.type=fine_tuning")
@@ -870,8 +776,6 @@ def run_fine_tuning(config_path: Path) -> Path:
             "fine_tuning.nested_subsets must stay true; the recovery comparison assumes it"
         )
     if not settings.get("reload_starting_checkpoint_each_run", True):
-        # Every cell always reloads the original checkpoint. Accepting `false` would let a
-        # config claim cumulative adaptation while the code does the opposite.
         raise ValueError(
             "fine_tuning.reload_starting_checkpoint_each_run must be true: each budget is "
             "an independent condition restarted from the 0% checkpoint, never a "
@@ -888,7 +792,6 @@ def run_fine_tuning(config_path: Path) -> Path:
         adaptation_pool, final_test_records, final_test_metadata = build_recovery_pools(
             config, bundle, unseen, known
         )
-        # Seen-generator validation, used only to derive the unchanged baseline threshold.
         seen_validation_records = select_records(
             bundle.records,
             bundle.split_by_id,

@@ -1,44 +1,4 @@
-"""Cross-run aggregation of saved experiment artefacts.
-
-``scripts/build_report.py`` reports one run of each experiment type in isolation. A
-dissertation chapter needs the opposite view: every run side by side, so that an
-in-distribution baseline, several held-out generators, several adaptation budgets, and
-several fine-tuning depths can be compared in one table without anyone retyping a
-number.
-
-This module is that view, and it obeys the same rule as the reporter: **it is strictly a
-reader**. It never loads a model, never scores an image, and never recomputes a metric
-from raw predictions. Every value it emits is copied from a ``*_metrics.json`` file that
-an experiment run already wrote and hashed into its ``artefacts.json``. The only
-arithmetic performed here is over numbers that are already saved, and each such quantity
-is named so it cannot be mistaken for a measurement:
-
-* ``positive_prevalence`` -- derived from the saved ``true_positive``/``false_negative``
-  counts, because prevalence decides whether two F1 values are comparable at all.
-* ``absolute_recovery`` -- the saved metric at budget *p* minus the saved metric at 0%.
-* ``relative_improvement`` -- that difference expressed as a fraction of the 0% value.
-* ``gap_closed_fraction`` -- that difference as a fraction of the measured
-  in-distribution-minus-unseen gap, i.e. how much of the generalisation gap the budget
-  bought back.
-
-Nothing is imputed. A quantity that no run measured is ``None`` and is rendered as
-``undefined``, never as zero and never as a value borrowed from a different run.
-
-Provenance
-----------
-Every consolidated row carries ``run_id``, ``source_file``, and ``source_sha256`` (the
-digest the run itself recorded in ``artefacts.json``). A reader can therefore take any
-cell of any generated table, find the run directory, and verify the file it came from
-still hashes to the recorded value.
-
-Synthetic smoke runs
---------------------
-``scripts/make_synthetic_smoke_data.py`` produces runs whose experiment names are
-prefixed ``SMOKE_``. Those verify the mechanism on procedurally generated images and are
-**not** detector performance. They are excluded from research aggregation by default and
-must be opted into explicitly; every record carries ``is_synthetic_smoke`` so a caller
-that does opt in cannot then lose track of which rows they are.
-"""
+"""Cross-run aggregation of saved experiment artefacts."""
 
 from __future__ import annotations
 
@@ -53,8 +13,6 @@ from typing import Any
 
 import yaml
 
-# Which metrics file identifies each protocol. Mirrors scripts/build_report.py, which is
-# the other reader of the same directories.
 EXPERIMENT_METRIC_FILES: Mapping[str, str] = {
     "baseline": "test_metrics.json",
     "unseen_generator": "unseen_generator_metrics.json",
@@ -62,7 +20,6 @@ EXPERIMENT_METRIC_FILES: Mapping[str, str] = {
     "ablation": "ablation_metrics.json",
 }
 
-#: Metrics copied verbatim from a saved metric block.
 METRIC_NAMES: tuple[str, ...] = (
     "accuracy",
     "precision",
@@ -72,7 +29,6 @@ METRIC_NAMES: tuple[str, ...] = (
     "average_precision",
 )
 
-#: Confusion counts copied verbatim from a saved metric block.
 COUNT_NAMES: tuple[str, ...] = (
     "true_negative",
     "false_positive",
@@ -80,7 +36,6 @@ COUNT_NAMES: tuple[str, ...] = (
     "true_positive",
 )
 
-#: Metrics for which across-seed and recovery summaries are produced.
 SUMMARY_METRICS: tuple[str, ...] = (
     "roc_auc",
     "average_precision",
@@ -90,30 +45,19 @@ SUMMARY_METRICS: tuple[str, ...] = (
     "recall",
 )
 
-#: Metrics computed from continuous scores, so their value does not depend on the
-#: decision threshold. Everything else in :data:`SUMMARY_METRICS` is threshold-dependent
-#: and may only be compared against a reference measured at the *same* operating point.
 THRESHOLD_FREE_METRICS: frozenset[str] = frozenset({"roc_auc", "average_precision"})
 
-#: Column order of the consolidated tidy table. Declared once so the CSV writer, the
-#: notebooks, and the tests cannot disagree about the schema.
 CONSOLIDATED_COLUMNS: tuple[str, ...] = (
-    # identity and provenance
     "run_id",
     "experiment_type",
     "experiment_name",
     "protocol",
     "is_synthetic_smoke",
-    # experimental condition
     "evaluation_set",
     "condition",
     "generator",
     "held_out_generator",
     "fine_tune_mode",
-    # Which classifier architecture produced the row. Read from the run's own
-    # resolved_config.yaml, so it is available for every run already on disk. Without it
-    # two runs that differ ONLY by head type are indistinguishable in a consolidated
-    # table, which is exactly the linear-versus-cosine comparison this project makes.
     "head_type",
     "adaptation_percentage",
     "subset_seed",
@@ -121,12 +65,10 @@ CONSOLIDATED_COLUMNS: tuple[str, ...] = (
     "operating_point",
     "threshold",
     "threshold_provenance",
-    # measurements
     "support",
     "positive_prevalence",
     *METRIC_NAMES,
     *COUNT_NAMES,
-    # model and training metadata
     "trainable_parameters",
     "total_parameters",
     "trainable_parameter_fraction",
@@ -141,13 +83,11 @@ CONSOLIDATED_COLUMNS: tuple[str, ...] = (
     "selected_checkpoint_sha256",
     "starting_checkpoint",
     "seed",
-    # traceability
     "manifest_sha256",
     "source_file",
     "source_sha256",
 )
 
-#: Column order of the per-run summary table.
 RUN_SUMMARY_COLUMNS: tuple[str, ...] = (
     "run_id",
     "experiment_type",
@@ -175,7 +115,6 @@ RUN_SUMMARY_COLUMNS: tuple[str, ...] = (
     "run_dir",
 )
 
-#: Column order of the recovery summary table.
 RECOVERY_SUMMARY_COLUMNS: tuple[str, ...] = (
     "run_id",
     "held_out_generator",
@@ -203,23 +142,14 @@ RECOVERY_SUMMARY_COLUMNS: tuple[str, ...] = (
     "in_distribution_reference_match",
 )
 
-#: Below this, the measured in-distribution-minus-unseen gap is too small for
-#: "fraction of the gap closed" to carry information: the denominator is dominated by
-#: sampling noise, so a tiny absolute gain reads as a huge percentage. Rows below the
-#: threshold still report the fraction, but flag it as unreliable rather than deleting
-#: it or quietly rounding it away.
 MINIMUM_RELIABLE_GAP: float = 0.02
 
 _RUN_ID_TIMESTAMP = re.compile(r"-(\d{8}T\d{6}\d*Z)-")
 
 
-# --------------------------------------------------------------------------- discovery
-
-
 @dataclass(frozen=True, slots=True)
 class RunRecord:
     """Everything known about one run directory without opening its metrics file."""
-
     run_id: str
     run_dir: Path
     experiment_type: str
@@ -247,7 +177,6 @@ class RunRecord:
     @property
     def is_reportable(self) -> bool:
         """Completed, carrying a metrics file, and not a synthetic smoke run."""
-
         return self.status == "completed" and self.has_metrics and not self.is_synthetic_smoke
 
 
@@ -259,12 +188,7 @@ def _read_json(path: Path) -> Any:
 
 
 def _read_status(run_dir: Path) -> str:
-    """``completed``/``failed`` as recorded, or ``incomplete`` when no status was written.
-
-    A missing ``status.json`` is exactly what an interrupted run leaves behind, so it is
-    reported as its own state rather than being conflated with a recorded failure.
-    """
-
+    """``completed``/``failed`` as recorded, or ``incomplete`` when no status was written."""
     status = _read_json(run_dir / "status.json")
     if isinstance(status, dict) and isinstance(status.get("status"), str):
         return str(status["status"])
@@ -316,12 +240,7 @@ def _as_float(value: Any) -> float | None:
 
 
 def describe_run(run_dir: Path) -> RunRecord | None:
-    """Build a :class:`RunRecord` for one directory, or ``None`` if it is not a run.
-
-    Runs of every status are described, including failed and interrupted ones: an audit
-    that silently drops them cannot report what is missing.
-    """
-
+    """Build a :class:`RunRecord` for one directory, or ``None`` if it is not a run."""
     if not run_dir.is_dir():
         return None
     experiment_type = run_dir.name.split("-", 1)[0]
@@ -339,8 +258,6 @@ def describe_run(run_dir: Path) -> RunRecord | None:
     training = block("training")
     model = block("model")
     data = block("data")
-    # ``generators`` is a top-level section of the resolved config, not a child of
-    # ``experiment``; see any outputs/*/resolved_config.yaml.
     generators = block("generators")
     reproducibility = block("reproducibility")
 
@@ -353,8 +270,6 @@ def describe_run(run_dir: Path) -> RunRecord | None:
         experiment_type=experiment_type,
         experiment_name=experiment_name,
         status=_read_status(run_dir),
-        # The SMOKE_ prefix is applied by the synthetic configs and is the marker the
-        # rest of the repository already uses; see scripts/make_synthetic_smoke_data.py.
         is_synthetic_smoke=experiment_name.startswith("SMOKE_"),
         metrics_path=metrics_path if metrics_path.is_file() else None,
         started_at=_started_at(run_dir.name),
@@ -362,9 +277,6 @@ def describe_run(run_dir: Path) -> RunRecord | None:
         fine_tune_mode=(
             str(training["fine_tune_mode"]) if training.get("fine_tune_mode") else None
         ),
-        # Runs predating model.head_type saved no such key, and the only head that
-        # existed then was the linear one, so "linear" is the accurate value for them
-        # rather than a guess. A directory with no model block at all stays None.
         head_type=(str(model.get("head_type", "linear")) if model else None),
         seed=_as_int(reproducibility.get("seed")),
         epochs=_as_int(training.get("epochs")),
@@ -378,13 +290,7 @@ def describe_run(run_dir: Path) -> RunRecord | None:
 
 
 def discover_runs(output_root: Path) -> list[RunRecord]:
-    """Describe every run directory under ``output_root``, oldest first.
-
-    Unlike ``scripts.build_report.discover_runs``, this keeps *all* runs of *all*
-    statuses. Filtering is the caller's decision and is made explicit by
-    :func:`reportable_runs`.
-    """
-
+    """Describe every run directory under ``output_root``, oldest first."""
     records = [
         record
         for path in sorted(output_root.iterdir() if output_root.is_dir() else [])
@@ -398,7 +304,6 @@ def reportable_runs(
     records: Iterable[RunRecord], *, include_synthetic_smoke: bool = False
 ) -> list[RunRecord]:
     """Completed runs that carry a metrics file, excluding smoke runs by default."""
-
     return [
         record
         for record in records
@@ -410,7 +315,6 @@ def reportable_runs(
 
 def load_metrics(record: RunRecord) -> dict[str, Any]:
     """Read a run's metrics file. Raises if the run has none, rather than returning {}."""
-
     if record.metrics_path is None:
         raise FileNotFoundError(
             f"run {record.run_id} has no {EXPERIMENT_METRIC_FILES[record.experiment_type]}"
@@ -421,12 +325,8 @@ def load_metrics(record: RunRecord) -> dict[str, Any]:
     return payload
 
 
-# ------------------------------------------------------------------------ consolidation
-
-
 def _metric_block(block: Mapping[str, Any] | None) -> dict[str, Any]:
     """Copy a saved metric block verbatim, deriving only prevalence from saved counts."""
-
     row: dict[str, Any] = dict.fromkeys(METRIC_NAMES)
     row.update(dict.fromkeys(COUNT_NAMES))
     row["support"] = None
@@ -440,9 +340,6 @@ def _metric_block(block: Mapping[str, Any] | None) -> dict[str, Any]:
         row[name] = _as_int(block.get(name))
     row["support"] = _as_int(block.get("support"))
     row["threshold"] = _as_float(block.get("threshold"))
-    # Prevalence decides whether two precision/F1/PR-AUC values are comparable, so it is
-    # carried explicitly rather than left for a reader to infer. It is arithmetic over
-    # counts the run already saved, not a recomputation from predictions.
     positives = row["true_positive"], row["false_negative"]
     if all(value is not None for value in positives) and row["support"]:
         row["positive_prevalence"] = (positives[0] + positives[1]) / row["support"]
@@ -471,7 +368,6 @@ def _base_row(record: RunRecord, protocol: str | None) -> dict[str, Any]:
 
 def _finalise_row(row: dict[str, Any]) -> dict[str, Any]:
     """Derive the trainable fraction and drop anything outside the declared schema."""
-
     trainable, total = row.get("trainable_parameters"), row.get("total_parameters")
     if isinstance(trainable, int) and isinstance(total, int) and total > 0:
         row["trainable_parameter_fraction"] = trainable / total
@@ -480,7 +376,6 @@ def _finalise_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def _selected_checkpoint(record: RunRecord) -> tuple[str | None, str | None]:
     """The checkpoint a long-training run's reported numbers came from, and its digest."""
-
     name = "best_checkpoint.pt"
     if name in record.artefact_digests:
         return str(record.run_dir / name), record.artefact_digests[name]
@@ -523,8 +418,6 @@ def _rows_from_unseen_generator(
     thresholds = metrics.get("thresholds") or {}
     shared = {
         "held_out_generator": held_out,
-        # No adaptation has happened yet: this run *is* the 0% condition that every
-        # recovery curve is measured against.
         "fine_tune_mode": "none",
         "adaptation_percentage": 0.0,
         "best_epoch": _as_int(metrics.get("best_epoch")),
@@ -577,14 +470,12 @@ def _rows_from_unseen_generator(
     return rows
 
 
-#: Operating points saved per adapted cell, and the block each one lives in.
 _CELL_OPERATING_POINTS: tuple[tuple[str, str], ...] = (
     ("default", "overall"),
     ("adaptation_selected", "at_adaptation_selected_threshold"),
     ("baseline_unchanged", "at_baseline_threshold"),
 )
 
-#: How a cell's operating point maps onto the threshold provenance the run recorded.
 _CELL_THRESHOLD_KEYS: Mapping[str, str] = {
     "adaptation_selected": "adaptation_validation_selected",
     "baseline_unchanged": "baseline_unchanged",
@@ -593,7 +484,6 @@ _CELL_THRESHOLD_KEYS: Mapping[str, str] = {
 
 def _rows_from_cells(record: RunRecord, metrics: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Flatten the recovery/ablation grid. Both protocols share the cell schema."""
-
     protocol = str(metrics.get("protocol") or record.experiment_type)
     manifest_sha = metrics.get("manifest_sha256")
     rows: list[dict[str, Any]] = []
@@ -620,8 +510,6 @@ def _rows_from_cells(record: RunRecord, metrics: Mapping[str, Any]) -> list[dict
             "labelled_images_consumed": _as_int(cell.get("labelled_images_consumed")),
             "held_out_fake_count": _as_int(cell.get("held_out_fake_count")),
             "starting_checkpoint": cell.get("starting_checkpoint"),
-            # Each cell's weights are deleted after its predictions are saved (see the
-            # README's grid-cost note); the digest is what remains to identify them.
             "selected_checkpoint_sha256": checkpoint_digests.get("best_checkpoint.pt"),
             "manifest_sha256": manifest_sha,
         }
@@ -670,13 +558,7 @@ _ROW_BUILDERS = {
 
 
 def consolidate_runs(records: Sequence[RunRecord]) -> list[dict[str, Any]]:
-    """Flatten every given run into one tidy table of evaluated conditions.
-
-    One row per (run, evaluation set, condition, operating point). Callers are expected
-    to have filtered with :func:`reportable_runs` first; runs without metrics are skipped
-    rather than raising, so a partially finished study still aggregates.
-    """
-
+    """Flatten every given run into one tidy table of evaluated conditions."""
     rows: list[dict[str, Any]] = []
     for record in records:
         if not record.has_metrics:
@@ -692,7 +574,6 @@ def summarise_runs(
     records: Sequence[RunRecord], consolidated: Sequence[Mapping[str, Any]] = ()
 ) -> list[dict[str, Any]]:
     """One row per discovered run: what it was, whether it finished, and its environment."""
-
     condition_counts: dict[str, int] = {}
     for row in consolidated:
         run_id = str(row.get("run_id"))
@@ -743,16 +624,12 @@ def summarise_runs(
     return summary
 
 
-# ----------------------------------------------------------------------------- recovery
-
-
 def _mean(values: Sequence[float]) -> float:
     return sum(values) / len(values)
 
 
 def _standard_deviation(values: Sequence[float]) -> float:
     """Sample standard deviation; 0.0 for a single run, where spread is unmeasured."""
-
     if len(values) < 2:
         return 0.0
     mean = _mean(values)
@@ -766,32 +643,7 @@ def in_distribution_reference(
     held_out_generator: str | None = None,
     starting_checkpoint: str | None = None,
 ) -> tuple[float | None, str | None, str | None]:
-    """The prevalence-matched in-distribution value a recovery curve is measured against.
-
-    Taken from the unseen-generator run's own ``generalisation_gap`` block, because that
-    is the in-distribution number computed on a test set balanced to match the unseen
-    one. Any other in-distribution figure would be measured at a different prevalence and
-    would make the gap an arithmetic artefact rather than a generalisation result.
-
-    Which unseen run
-    ----------------
-    Held-out generator alone does NOT identify the run. This project deliberately runs
-    the same generator under more than one classifier head (see
-    ``configs/tiny_unseen_vqdm.yaml`` against ``configs/tiny_unseen_vqdm_cosine.yaml``),
-    so matching on the generator and taking the newest run can quote the ceiling of a
-    model the recovery curve was never started from.
-
-    ``starting_checkpoint`` is the exact link: an adaptation cell records the checkpoint
-    file it reloaded, and that file lives inside the unseen run that produced it. When it
-    is given, the reference comes from that run and no other. The generator match is kept
-    only as a fallback, and the returned ``match`` says which happened
-    (``starting_checkpoint`` or ``held_out_generator``) so a table can never present a
-    fallback as if it were provenance.
-
-    Returns ``(None, None, None)`` when no such run exists, so callers cannot silently
-    substitute a value from elsewhere.
-    """
-
+    """The prevalence-matched in-distribution value a recovery curve is measured against."""
     gap_key = {"f1": "f1_at_default_threshold"}.get(metric, metric)
 
     def reference_of(record: RunRecord) -> float | None:
@@ -803,8 +655,6 @@ def in_distribution_reference(
     unseen_runs = [record for record in records if record.experiment_type == "unseen_generator"]
 
     if starting_checkpoint:
-        # The checkpoint path names its own run directory; compare on the directory name
-        # so an absolute path recorded on another machine still resolves.
         owner = Path(starting_checkpoint).parent.name
         for record in unseen_runs:
             if record.run_id != owner:
@@ -812,8 +662,6 @@ def in_distribution_reference(
             value = reference_of(record)
             if value is not None:
                 return value, record.run_id, "starting_checkpoint"
-        # A named checkpoint that no discovered unseen run owns must not silently fall
-        # through to a different model's ceiling.
         return None, None, None
 
     for record in reversed(unseen_runs):
@@ -835,26 +683,7 @@ def summarise_recovery(
     records: Sequence[RunRecord] = (),
     metrics: Sequence[str] = SUMMARY_METRICS,
 ) -> list[dict[str, Any]]:
-    """Aggregate adapted cells by budget and depth, with uncertainty and recovery.
-
-    Repeated subset/training seeds within one (run, mode, budget, operating point) group
-    are aggregated into mean, sample standard deviation, and standard error. With a
-    single run the spread is *unmeasured*, not zero-variance: ``runs`` is reported beside
-    every mean so a caller can refuse to draw an error bar it has no evidence for.
-
-    Recovery is expressed three ways because no single one is safe on its own:
-
-    ``absolute_recovery``
-        metric(p) - metric(0). Always defined when the 0% row exists.
-    ``relative_improvement``
-        that difference over the 0% value; scale-free but says nothing about the ceiling.
-    ``gap_closed_fraction``
-        that difference over the measured in-distribution-minus-unseen gap. This is the
-        quantity a reader means by "recovered", but it is unstable when the gap is small,
-        so ``gap_closed_is_reliable`` flags whether the denominator is large enough
-        (see :data:`MINIMUM_RELIABLE_GAP`) to support the claim.
-    """
-
+    """Aggregate adapted cells by budget and depth, with uncertainty and recovery."""
     cell_rows = [
         row
         for row in consolidated
@@ -874,8 +703,6 @@ def summarise_recovery(
         )
         grouped.setdefault(key, []).append(row)
 
-    # The 0% reference lives in the same run under fine_tune_mode "none"; look it up per
-    # (run, operating point) so each curve is measured against its own starting point.
     zero_by_key: dict[tuple[Any, Any, str], float] = {}
     for (run_id, _held_out, mode, _head, percentage, operating_point), rows in grouped.items():
         if percentage != 0.0:
@@ -891,8 +718,6 @@ def summarise_recovery(
     summary: list[dict[str, Any]] = []
     for key, rows in sorted(grouped.items(), key=lambda item: tuple(str(part) for part in item[0])):
         run_id, held_out, mode, head_type, percentage, operating_point = key
-        # The checkpoint every cell in this group reloaded. It identifies the unseen run
-        # whose in-distribution ceiling this curve is entitled to be measured against.
         starting_checkpoint = next(
             (
                 str(row["starting_checkpoint"])
@@ -913,12 +738,6 @@ def summarise_recovery(
             deviation = _standard_deviation(values)
             zero_value = zero_by_key.get((run_id, operating_point, metric))
 
-            # The saved in-distribution reference was measured at the default threshold.
-            # For a threshold-dependent metric it is therefore only a like-for-like
-            # ceiling at the default operating point; quoting it against an F1 measured
-            # at an adaptation-selected threshold would compare two different operating
-            # points and report the difference as a generalisation gap. Leave it
-            # undefined instead.
             comparable = metric in THRESHOLD_FREE_METRICS or operating_point == "default"
             reference, reference_run, reference_match = (
                 in_distribution_reference(
@@ -954,7 +773,6 @@ def summarise_recovery(
                     "runs": len(values),
                     "mean": mean,
                     "standard_deviation": deviation,
-                    # Undefined rather than 0.0 for a single run: no spread was measured.
                     "standard_error": (
                         deviation / math.sqrt(len(values)) if len(values) > 1 else None
                     ),
@@ -993,12 +811,7 @@ def summarise_recovery(
 
 
 def degradation_rows(consolidated: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """In-distribution versus unseen, per held-out generator, at each operating point.
-
-    Only rows from ``unseen_generator`` runs are used, because only those measured both
-    sides of the comparison on prevalence-matched test sets within a single model.
-    """
-
+    """In-distribution versus unseen, per held-out generator, at each operating point."""
     by_key: dict[tuple[Any, Any, Any], dict[str, Mapping[str, Any]]] = {}
     for row in consolidated:
         if row.get("experiment_type") != "unseen_generator" or row.get("condition") != "overall":
@@ -1052,14 +865,10 @@ def degradation_rows(consolidated: Sequence[Mapping[str, Any]]) -> list[dict[str
     return rows
 
 
-# ------------------------------------------------------------------------------ writing
-
-
 def write_table(
     rows: Sequence[Mapping[str, Any]], columns: Sequence[str], destination: Path
 ) -> Path:
     """Write a tidy CSV with a declared column order. Missing keys become empty cells."""
-
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(columns), extrasaction="ignore")

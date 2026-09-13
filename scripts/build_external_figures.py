@@ -1,29 +1,4 @@
-"""Figures and a table for the external contemporary-generator challenge.
-
-Read-only. Everything is drawn from the saved external run and the saved internal runs it
-compares against; no metric is recomputed from a model, and nothing is interpolated or
-smoothed. Curves are drawn from the per-sample prediction files, which is the same data
-the reported scalar metrics were computed from.
-
-Three figures, each answering something a table cannot:
-
-``fig15_external_vs_internal_<metric>``
-    The frozen detector's discrimination on three evaluation sets side by side: the
-    in-distribution internal test, the unseen internal generator, and the external
-    challenge set. This is the comparison the external study exists to make.
-
-``fig16_external_roc_pr``
-    ROC and precision-recall curves for the primary detector on the external set beside
-    its internal unseen curve, so the shape of the difference is visible and not only its
-    area.
-
-``fig17_external_score_distributions``
-    Where the external authentic and generated scores actually fall relative to the fixed
-    0.5 operating point, which is what determines the reported F1.
-
-The external set is 100 images per class. That is the pre-registered minimum-reportable
-tier, not the recommended 250, and every figure caption says so via the subtitle.
-"""
+"""Figures and a table for the external contemporary-generator challenge."""
 
 from __future__ import annotations
 
@@ -46,7 +21,6 @@ from src.evaluation.metrics import (  # noqa: E402
     roc_curve_data,
 )
 
-#: One colour per evaluation set, kept stable across every figure here.
 SET_STYLE: dict[str, dict[str, Any]] = {
     "in_distribution": {
         "colour": "#4C72B0",
@@ -62,7 +36,6 @@ METRIC_LABELS = {
     "f1": "F1 at threshold 0.5",
 }
 
-#: Compact axis labels: the full role name is carried in the table, not the tick.
 ROLE_LABELS = {
     "primary_vqdm_held_out_linear": "vqdm held out\nlinear\n(primary)",
     "all_seven_generators_seen_baseline": "all seven seen\nbaseline",
@@ -76,9 +49,6 @@ SUBTITLE = (
     "route, so no architectural claim attaches to these numbers."
 )
 
-#: Written alongside the exports, because ``outputs/report/`` is documented as
-#: safe to delete and regenerate. Kept as a template file so its markdown tables
-#: are not subject to the source line-length rule.
 EXTERNAL_README_TEMPLATE = (
     Path(__file__).with_name("report_readmes") / "external_challenge.md"
 )
@@ -102,7 +72,6 @@ def _read_predictions(path: Path) -> tuple[list[int], list[float]]:
 
 def _detector_series(metrics: Mapping[str, Any], metric: str) -> list[dict[str, Any]]:
     """One entry per detector, carrying its three comparable numbers where they exist."""
-
     series: list[dict[str, Any]] = []
     for detector in metrics["detectors"]:
         reference = detector["internal_reference"]
@@ -127,7 +96,6 @@ def external_vs_internal(
     metrics: Mapping[str, Any], destination: Path, *, metric: str
 ) -> list[Path]:
     """Grouped bars: each frozen detector on each evaluation set it has a number for."""
-
     series = _detector_series(metrics, metric)
     if not series:
         return []
@@ -162,8 +130,6 @@ def external_vs_internal(
                 ha="center",
                 fontsize=7.5,
             )
-        # A detector with no number for a set gets an explicit gap marker rather than a
-        # zero bar, so an absent measurement cannot read as a poor one.
         for position, value in paired:
             if value is None:
                 axes.annotate(
@@ -214,7 +180,6 @@ def external_roc_pr(
     metrics: Mapping[str, Any], run_dir: Path, output_root: Path, destination: Path
 ) -> list[Path]:
     """ROC and PR curves for the primary detector, external beside internal unseen."""
-
     primary = next((item for item in metrics["detectors"] if item["is_primary"]), None)
     if primary is None:
         return []
@@ -303,7 +268,6 @@ def external_score_distributions(
     metrics: Mapping[str, Any], run_dir: Path, destination: Path
 ) -> list[Path]:
     """Where the external scores fall relative to the fixed 0.5 operating point."""
-
     detectors = [
         item
         for item in metrics["detectors"]
@@ -360,7 +324,6 @@ def external_score_distributions(
 
 def external_table(metrics: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The external result as one flat table, internal references alongside."""
-
     rows: list[dict[str, Any]] = []
     for detector in metrics["detectors"]:
         external = detector["external_test"]["at_default_threshold"]

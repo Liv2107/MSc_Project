@@ -1,20 +1,4 @@
-"""Verify the methodological corrections against the actual processed dataset.
-
-Read-only. Fails loudly if any invariant is violated, so this can be run as a gate
-before committing expensive compute. Each check corresponds to a numbered requirement:
-
-4. container format no longer predicts the class
-5. every processed image has the intended spatial dimensions
-6. the unseen test set is class balanced for every held-out generator
-7. the unseen test membership is identical across every adaptation budget
-8. every adaptation budget reloads the original starting checkpoint
-9. the external challenge set is balanced, format-neutral, and disjoint from every
-   internal split (skipped until the external manifest has been built)
-
-Usage:
-    python -m scripts.verify_corrections --manifest data/manifests/tiny_genimage.csv \
-        --splits data/manifests/tiny_genimage_splits.csv
-"""
+"""Verify the methodological corrections against the actual processed dataset."""
 
 from __future__ import annotations
 
@@ -56,7 +40,6 @@ def check_format_not_predictive(
     rows: Sequence[dict[str, Any]], data_root: Path, sample_limit: int | None
 ) -> dict[str, Any]:
     """Container format must be constant across classes, so it cannot predict the label."""
-
     by_class: dict[int, collections.Counter[str]] = {
         0: collections.Counter(),
         1: collections.Counter(),
@@ -78,7 +61,6 @@ def check_format_not_predictive(
     formats_real = set(by_class[0])
     formats_fake = set(by_class[1])
     all_formats = formats_real | formats_fake
-    # Predictive iff the two classes use disjoint format sets.
     predictive = bool(formats_real and formats_fake and not (formats_real & formats_fake))
     return {
         "check": "format_not_predictive_of_class",
@@ -97,7 +79,6 @@ def check_spatial_dimensions(
     rows: Sequence[dict[str, Any]], data_root: Path, expected: int, sample_limit: int | None
 ) -> dict[str, Any]:
     """Every processed image must carry the intended, generator-independent size."""
-
     sizes: collections.Counter[str] = collections.Counter()
     by_generator: dict[str, set[str]] = {}
     offenders: list[str] = []
@@ -129,7 +110,6 @@ def check_balanced_unseen_tests(
     rows: Sequence[dict[str, Any]], data_root: Path, splits_path: Path
 ) -> dict[str, Any]:
     """Each held-out generator's final test set must be 50/50 on a shared real pool."""
-
     records = [_record_from_row(row, data_root) for row in rows]
     split_by_id = {item.sample_id: item.split for item in load_split_assignments(splits_path)}
     per_generator: dict[str, Any] = {}
@@ -173,7 +153,6 @@ def check_balanced_unseen_tests(
 
 def check_test_membership_stable_across_budgets(run_dir: Path) -> dict[str, Any]:
     """Every budget in a completed recovery run must score identical test membership."""
-
     metrics_path = run_dir / "recovery_metrics.json"
     if not metrics_path.is_file():
         return {"check": "test_membership_stable", "skipped": f"no recovery run at {run_dir}"}
@@ -203,7 +182,6 @@ def check_test_membership_stable_across_budgets(run_dir: Path) -> dict[str, Any]
 
 def check_budgets_reload_starting_checkpoint(run_dir: Path) -> dict[str, Any]:
     """Every budget must declare the same original starting checkpoint."""
-
     metrics_path = run_dir / "recovery_metrics.json"
     if not metrics_path.is_file():
         return {"check": "budgets_reload_starting_checkpoint", "skipped": f"no run at {run_dir}"}
@@ -225,13 +203,7 @@ def check_budgets_reload_starting_checkpoint(run_dir: Path) -> dict[str, Any]:
 def check_configs_against_manifest(
     rows: Sequence[dict[str, Any]], data_root: Path, splits_path: Path, config_glob: str
 ) -> dict[str, Any]:
-    """Pre-flight every real config against the manifest before spending compute.
-
-    Catches the failure mode where a config's generator list does not match the manifest
-    (a typo, or a shell that did not split a list), which would otherwise waste hours
-    training on real images only.
-    """
-
+    """Pre-flight every real config against the manifest before spending compute."""
     from src.experiments.unseen_generator import validate_unseen_protocol
     from src.utils.config import load_config
 
@@ -242,7 +214,6 @@ def check_configs_against_manifest(
     all_passed = True
     for path in sorted(Path("configs").glob(config_glob)):
         if path.name.endswith("_base.yaml"):
-            # An inheritance base, not a runnable experiment; it has no experiment block.
             continue
         entry: dict[str, Any] = {}
         try:
@@ -275,7 +246,7 @@ def check_configs_against_manifest(
                 entry["passed"] = not missing and train_fakes > 0
             else:
                 entry["passed"] = not missing
-        except Exception as exc:  # surfaced per config, never silently swallowed
+        except Exception as exc:
             entry["error"] = f"{type(exc).__name__}: {exc}"
             entry["passed"] = False
         per_config[path.name] = entry
@@ -295,14 +266,7 @@ def check_external_challenge_set(
     external_manifest: Path,
     external_audit: Path,
 ) -> dict[str, Any]:
-    """The external evaluation set must be balanced, format-neutral, and fully external.
-
-    This is step 5 of the pre-registered external protocol. It is deliberately separate
-    from the internal checks: an external image that turned out to be an internal image,
-    or an external set whose container format tracked the class, would make the external
-    number measure something other than generator novelty.
-    """
-
+    """The external evaluation set must be balanced, format-neutral, and fully external."""
     name = "external_challenge_set_balanced_format_neutral_and_disjoint"
     if not external_manifest.is_file():
         return {"check": name, "skipped": f"no external manifest at {external_manifest}"}
@@ -334,9 +298,6 @@ def check_external_challenge_set(
     internal_paths = {str(row["image_path"]) for row in internal_rows}
     fake_path_overlap = sorted(fake_paths & internal_paths)
 
-    # The authentic comparators are internal images by design: the protocol draws them
-    # from the held-out real pool. What must hold is that every one of them sits in the
-    # test split, so the detectors never trained on any of them.
     comparator_splits = collections.Counter(
         split_by_id.get(str(row["sample_id"]), "not_in_internal_manifest") for row in reals
     )

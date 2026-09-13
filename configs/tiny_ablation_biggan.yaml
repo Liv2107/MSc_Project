@@ -1,14 +1,6 @@
-# Fine-tuning-depth ablation on Tiny GenImage for held-out biggan.
-#
-# Research question: when adapting to a previously unseen generator with limited
-# labelled data, how much of the model needs to be fine-tuned?
-#
-# First pass: 3 modes x 4 budgets x 1 subset seed x 1 training seed = 12 adaptation
-# cells, plus the 0% reference recomputed in-run.
-#
-# Everything except the trainable depth is inherited from the completed head-only
-# recovery run: the same starting checkpoint, the same nested adaptation subsets, the
-# same untouched 500-image balanced biggan test set, and the same threshold policy.
+# biggan depth ablation: 3 modes x 4 budgets, one subset/training seed.
+# Shared checkpoint, subsets and test set; learning rates differ by depth.
+# Rationale and probe results: docs/experiment-design.md.
 
 base_config: tiny_genimage_base.yaml
 
@@ -45,26 +37,7 @@ ablation:
   record_trainable_parameter_names: true
   record_training_time: true
 
-# PREDECLARED PER-MODE LEARNING RATE.
-#
-# The inherited rate of 0.001 was chosen for a 769-parameter linear head. Applied to the
-# pretrained CLIP weights it is roughly two orders of magnitude too large. A probe on the
-# 5% budget, from this same checkpoint and these same subsets, over three epochs:
-#
-#   last_block  lr=0.001   val f1 0.59 -> 0.87 -> 0.86   (unstable but recovers)
-#   last_block  lr=1e-05   val f1 0.81 -> 0.69 -> 0.81
-#   full        lr=0.001   val f1 0.00 -> 0.00 -> 0.00   (collapsed, did not recover)
-#   full        lr=1e-05   val f1 0.95 -> 0.97 -> 1.00
-#
-# Holding 0.001 across all three depths would have made the ablation measure the learning
-# rate rather than the adaptation depth: full fine-tuning collapses at every budget, which
-# says nothing about whether broad adaptation helps. The rates below are therefore
-# declared in advance, before any ablation cell was fitted, and are recorded in
-# ablation_metrics.json under controls.mode_overrides_applied.
-#
-# The cost is that learning rate is no longer constant across modes, and Chapter 4 must
-# state that. head_only keeps 0.001, so its cells reproduce the completed head-only
-# recovery run and provide a reproducibility check on the shared data path.
+# Per-depth rates from the BigGAN validation probe; see docs/experiment-design.md.
 mode_overrides:
   head_only: null
   last_block:

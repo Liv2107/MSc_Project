@@ -14,7 +14,7 @@ trains, infers, recomputes a metric from raw predictions, interpolates, or smoot
 
 ## Reading it
 
-**`row_role`** — filter on this before building a table.
+**`row_role`**: filter on this before building a table.
 
 | value | meaning |
 |---|---|
@@ -25,7 +25,7 @@ trains, infers, recomputes a metric from raw predictions, interpolates, or smoot
 The zero-labelled point is canonically owned by the leave-one-generator-out run; every
 adapted cell is canonically owned by the depth ablation, because that grid holds all three
 depths against one starting checkpoint and one test set. The standalone recovery run's
-head-only cells are therefore `reproduction` — the same direction
+head-only cells are therefore `reproduction`: the same direction
 `dissertation_results/reproduction_checks.csv` uses.
 
 **`threshold_role`**
@@ -38,7 +38,7 @@ head-only cells are therefore `reproduction` — the same direction
 
 No threshold in any row was selected on a held-out or external test set.
 
-**`dataset`** — `tiny_genimage` rows and `external_challenge_v1_astra_mediated` rows must
+**`dataset`**: `tiny_genimage` rows and `external_challenge_v1_astra_mediated` rows must
 never be merged into one table. The external rows carry
 `generator_identity_known = False`: their generator was produced through a mediation route
 that does not report which image model it used, so no architectural claim attaches to
